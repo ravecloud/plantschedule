@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gantt Chart Viewer</title>
+  <!-- Include D3.js and PapaParse from CDNs -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 10px;
+    }
+    #controls {
+      margin-bottom: 10px;
+    }
+    #controls > * {
+      margin-right: 10px;
+      vertical-align: middle;
+    }
+    #chart {
+      border: 1px solid #ccc;
+      position: relative;
+      overflow: auto;
+    }
+    /* Simple tooltip styling */
+    #tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: lightgrey;
+      padding: 5px;
+      border: 1px solid #333;
+      border-radius: 3px;
+      font-size: 12px;
+      display: none;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Control Panel -->
+  <div id="controls">
+    <input type="file" id="csvFileInput" accept=".csv">
+    <label>
+      Row:
+      <input type="range" id="rowSlider" min="0" value="0">
+    </label>
+    <span id="metadataLabel">Metadata: </span>
+    <label>
+      Chart Start:
+      <input type="datetime-local" id="startTimeEdit">
+    </label>
+    <label>
+      Chart End:
+      <input type="datetime-local" id="endTimeEdit">
+    </label>
+    <button id="playButton">Play</button>
+    <label>
+      Delay (ms):
+      <input type="number" id="delaySpinBox" min="1" max="60000" value="1000">
+    </label>
+    <button id="exportButton">Export Chart</button>
+  </div>
+
+  <!-- Tooltip for bar hover details -->
+  <div id="tooltip"></div>
+
+  <!-- Container for the Gantt Chart -->
+  <div id="chart"></div>
+
+  <script>
+    // Global variables
+    let csvData = [];         // Array to hold CSV rows (as objects)
+    let currentRowIndex = 0;  // Current slider-selected row index
+    let playInterval = null;  // Timer for play mode
+
+    // ---------------------------
+    // Utility: Parse a date string in the format "MM/DD/YYYY hh:mm:ss AM/PM"
+    function parseDate(dateStr) {
+      let parts = dateStr.trim().split(" ");
+      if (parts.length < 3) return new Date(dateStr);
+      let dateParts = parts[0].split("/");
+      let month = parseInt(dateParts[0], 10);
+      let day = parseInt(dateParts[1], 10);
+      let year = parseInt(dateParts[2], 10);
+      let timeParts = parts[1].split(":");
+      let hour = parseInt(timeParts[0], 10);
+      let minute = parseInt(timeParts[1], 10);
+      let second = parseInt(timeParts[2], 10);
+      let ampm = parts[2].toUpperCase();
+      if (ampm === "PM" && hour < 12) hour += 12;
+      if (ampm === "AM" && hour === 12) hour = 0;
+      return new Date(year, month - 1, day, hour, minute, second);
+    }
+
+    // ---------------------------
+    // Set the fixed time range based on the first CSV row's "Sim Start"
+    function setFixedTimeRange(row) {
+      let simStartStr = row["Sim Start"];
+      if (!simStartStr) return;
+      let dt = parseDate(simStartStr);
+      // For <input type="datetime-local">, we need a string in the format "YYYY-MM-DDTHH:MM:SS"
+      function toLocalDateTimeString(date) {
+        // Adjust for local timezone
+        let tzOffset = date.getTimezoneOffset() * 60000;
+        let localDate = new Date(date.getTime() - tzOffset);
+        return localDate.toISOString().slice(0, 19);
+      }
+      document.getElementById("startTimeEdit").value = toLocalDateTimeString(dt);
+      // In the original code, the fixed end time is Sim Start + 32 hours
+      let endDt = new Date(dt.getTime() + 32 * 60 * 60 * 1000);
+      document.getElementById("endTimeEdit").value = toLocalDateTimeString(endDt);
+    }
+
+    // ---------------------------
+    // Update the view based on the current slider row and time range settings.
+    function updateView() {
+      if (csvData.length === 0) return;
+
+      currentRowIndex = parseInt(document.getElementById("rowSlider").value, 10);
+      let row = csvData[currentRowIndex];
+
+      // Update metadata (adjust these keys as needed)
+      const metaKeys = ["Generation", "Individual", "Fitness", "Age", "Measure", "Mean", "Std"];
+      let metaText = "Metadata: ";
+      metaKeys.forEach(key => {
+        metaText += key + ": " + (row[key] || "") + " | ";
+      });
+      document.getElementById("metadataLabel").innerText = metaText;
+
+      // Get time range from controls
+      let startDt = new Date(document.getElementById("startTimeEdit").value);
+      let endDt = new Date(document.getElementById("endTimeEdit").value);
+      let timeRange = [startDt, endDt];
+
+      // Get the simulation start time (for the vertical line)
+      let simStart = row["Sim Start"];
+
+      // The schedule JSON is assumed to be in the last column.
+      // (Since we used Papa Parse with header:true, we do not know the column name so we grab the last value.)
+      let values = Object.values(row);
+      let jsonStr = values[values.length - 1];
+      let scheduleData = {};
+      try {
+        scheduleData = JSON.parse(jsonStr);
+      } catch (e) {
+        console.error("Error parsing JSON:", e);
+      }
+      let resources = scheduleData["Resources"] || [];
+
+      // Draw (or re‐draw) the Gantt chart
+      plotGantt(resources, timeRange, simStart);
+    }
+
+    // ---------------------------
+    // Draw the Gantt chart using D3.
+    function plotGantt(resources, timeRange, simStart) {
+      // Remove any existing SVG chart.
+      d3.select("#chart").select("svg").remove();
+
+      const margin = { top: 40, right: 20, bottom: 40, left: 100 };
+      const width = 1000 - margin.left - margin.right;
+      const height = 600 - margin.top - margin.bottom;
+
+      const svg = d3.select("#chart")
+        .append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+      // Title
+      svg.append("text")
+         .attr("x", width / 2)
+         .attr("y", -margin.top / 2)
+         .attr("text-anchor", "middle")
+         .style("font-size", "18px")
+         .text("Gantt Chart");
+
+      // x-scale: time
+      const x = d3.scaleTime()
+                  .domain(timeRange)
+                  .range([0, width]);
+
+      // y-scale: one band per resource (use the resource Name)
+      const resourceNames = resources.map(r => r["Name"] || "Unknown");
+      const y = d3.scaleBand()
+                  .domain(resourceNames)
+                  .range([0, height])
+                  .padding(0.1);
+
+      // Draw x-axis
+      svg.append("g")
+         .attr("transform", "translate(0," + height + ")")
+         .call(d3.axisBottom(x).ticks(10));
+
+      // Draw y-axis
+      svg.append("g")
+         .call(d3.axisLeft(y));
+
+      // Define a color-mapping function similar to the Python version.
+      function getColor(opName, opOrder) {
+        let color = "blue";
+        if (opName.toLowerCase().includes("process")) {
+          color = "lightblue";
+          if (opOrder && opOrder.includes("Rush")) {
+            color = "red";
+          }
+        } else if (opName.toLowerCase().includes("changeover")) {
+          color = "gray";
+          if (opOrder && opOrder.includes("Rush")) {
+            color = "orange";
+          }
+        } else if (opName.toLowerCase().includes("wait")) {
+          color = "white";
+        } else if (opName.toLowerCase().includes("idle")) {
+          color = "white";
+        }
+        return color;
+      }
+
+      // For each resource and each operation, draw a rectangle (bar)
+      resources.forEach(resource => {
+        const ops = resource["Operations"] || [];
+        ops.forEach(op => {
+          let startStr = op["Start"];
+          let endStr = op["End"];
+          if (!startStr || !endStr) return;
+          let startTime = new Date(startStr);
+          let endTime = new Date(endStr);
+          // Only draw if the operation overlaps the current time range.
+          if (endTime < timeRange[0] || startTime > timeRange[1]) return;
+
+          // Clip start and end times to the time range if needed.
+          if (startTime < timeRange[0]) startTime = timeRange[0];
+          if (endTime > timeRange[1]) endTime = timeRange[1];
+
+          const opName = op["Name"] || "";
+          const opOrder = op["Order"] || "";
+          const color = getColor(opName, opOrder);
+
+          svg.append("rect")
+             .attr("x", x(startTime))
+             .attr("y", y(resource["Name"] || "Unknown"))
+             .attr("width", x(endTime) - x(startTime))
+             .attr("height", y.bandwidth())
+             .attr("fill", color)
+             .attr("stroke", "black")
+             .on("mouseover", (event) => {
+                // Build a tooltip text with the operation details.
+                let tooltipText = "";
+                for (const [key, value] of Object.entries(op)) {
+                  tooltipText += key + ": " + value + "<br/>";
+                }
+                d3.select("#tooltip")
+                  .html(tooltipText)
+                  .style("left", (event.pageX + 5) + "px")
+                  .style("top", (event.pageY + 5) + "px")
+                  .style("display", "block");
+             })
+             .on("mouseout", () => {
+                d3.select("#tooltip").style("display", "none");
+             });
+        });
+      });
+
+      // Draw the simulation start vertical line (if provided)
+      if (simStart) {
+        const simStartDate = parseDate(simStart);
+        if (simStartDate) {
+          svg.append("line")
+             .attr("x1", x(simStartDate))
+             .attr("y1", 0)
+             .attr("x2", x(simStartDate))
+             .attr("y2", height)
+             .attr("stroke", "red")
+             .attr("stroke-dasharray", "5,5");
+        }
+      }
+    }
+
+    // ---------------------------
+    // Set up event listeners
+
+    // CSV file loader
+    document.getElementById("csvFileInput").addEventListener("change", function (event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      Papa.parse(file, {
+        header: true,
+        delimiter: ";",
+        skipEmptyLines: true,
+        complete: function (results) {
+          csvData = results.data;
+          if (csvData.length > 0) {
+            // Set slider maximum (0-indexed)
+            const slider = document.getElementById("rowSlider");
+            slider.max = csvData.length - 1;
+            slider.value = 0;
+            // Set fixed time range based on the first row.
+            setFixedTimeRange(csvData[0]);
+            updateView();
+          }
+        }
+      });
+    });
+
+    // Slider event to update the chart when the row changes.
+    document.getElementById("rowSlider").addEventListener("input", updateView);
+
+    // Update chart if the time range inputs change.
+    document.getElementById("startTimeEdit").addEventListener("change", updateView);
+    document.getElementById("endTimeEdit").addEventListener("change", updateView);
+
+    // Play/Pause button to automatically advance the slider.
+    document.getElementById("playButton").addEventListener("click", function () {
+      const btn = this;
+      if (btn.innerText === "Play") {
+        btn.innerText = "Pause";
+        const delay = parseInt(document.getElementById("delaySpinBox").value, 10);
+        playInterval = setInterval(() => {
+          const slider = document.getElementById("rowSlider");
+          let newVal = parseInt(slider.value, 10) + 1;
+          if (newVal > parseInt(slider.max, 10)) {
+            newVal = 0; // Loop back to the beginning.
+          }
+          slider.value = newVal;
+          updateView();
+        }, delay);
+      } else {
+        btn.innerText = "Play";
+        clearInterval(playInterval);
+      }
+    });
+
+    // Export Chart: Download the current SVG as an SVG file.
+    document.getElementById("exportButton").addEventListener("click", function () {
+      const svgElement = document.querySelector("#chart svg");
+      if (!svgElement) {
+        alert("No chart to export.");
+        return;
+      }
+      const serializer = new XMLSerializer();
+      let source = serializer.serializeToString(svgElement);
+      // Add namespace if missing.
+      if (!source.match(/^<svg[^>]+xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      if (!source.match(/^<svg[^>]+"http:\/\/www\.w3\.org\/1999\/xlink"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+      }
+      source = '<?xml version="1.0" standalone="no"?>\r\n' + source;
+      const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(source);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "gantt_chart.svg";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+  </script>
+</body>
+</html>

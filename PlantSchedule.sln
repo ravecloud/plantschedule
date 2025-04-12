@@ -1,0 +1,81 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.4.33205.214
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PlantSchedule.RTS", "PlantSchedule.RTS\PlantSchedule.RTS.csproj", "{0C695B0A-5053-445B-9F8D-2DE927B29087}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{E77AB35D-A017-4128-A38F-DFA227C8933B}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+		PlantSchedule.Gui\example-data.csv = PlantSchedule.Gui\example-data.csv
+		PlantSchedule.Gui\gantt v0.0.1.py = PlantSchedule.Gui\gantt v0.0.1.py
+		PlantSchedule.Gui\gantt v0.0.2.html = PlantSchedule.Gui\gantt v0.0.2.html
+		PlantSchedule.Gui\gantt v0.0.2.py = PlantSchedule.Gui\gantt v0.0.2.py
+		PlantSchedule.Gui\gantt v0.0.3.html = PlantSchedule.Gui\gantt v0.0.3.html
+		PlantSchedule.Gui\gantt v0.0.3.py = PlantSchedule.Gui\gantt v0.0.3.py
+		PlantSchedule.Gui\gantt v0.0.4.html = PlantSchedule.Gui\gantt v0.0.4.html
+		PlantSchedule.Gui\gantt v0.0.5.html = PlantSchedule.Gui\gantt v0.0.5.html
+		PlantSchedule.Gui\gantt v0.0.6.html = PlantSchedule.Gui\gantt v0.0.6.html
+		PlantSchedule.Gui\gantt v0.0.7.html = PlantSchedule.Gui\gantt v0.0.7.html
+		PlantSchedule.Gui\gantt v0.0.8.html = PlantSchedule.Gui\gantt v0.0.8.html
+		PlantSchedule.Gui\gantt v0.0.9.html = PlantSchedule.Gui\gantt v0.0.9.html
+		PlantSchedule.Gui\results.csv = PlantSchedule.Gui\results.csv
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "PlantSchedule.Scripts", "PlantSchedule.Scripts", "{5D8E38C1-D20A-46E9-BC1A-1A3C7D52DF1D}"
+	ProjectSection(SolutionItems) = preProject
+		PlantSchedule.Scripts\appendRow.vb = PlantSchedule.Scripts\appendRow.vb
+		PlantSchedule.Scripts\buffer.txt = PlantSchedule.Scripts\buffer.txt
+		PlantSchedule.Scripts\change_worker.ps1 = PlantSchedule.Scripts\change_worker.ps1
+		PlantSchedule.Scripts\compare_sol.ps1 = PlantSchedule.Scripts\compare_sol.ps1
+		PlantSchedule.Scripts\Copy-From-Res.ps1 = PlantSchedule.Scripts\Copy-From-Res.ps1
+		PlantSchedule.Scripts\copy_database.ps1 = PlantSchedule.Scripts\copy_database.ps1
+		PlantSchedule.Scripts\display_results.py = PlantSchedule.Scripts\display_results.py
+		PlantSchedule.Scripts\eval_test_sim.ps1 = PlantSchedule.Scripts\eval_test_sim.ps1
+		PlantSchedule.Scripts\failed_orders.txt = PlantSchedule.Scripts\failed_orders.txt
+		PlantSchedule.Scripts\gantt.py = PlantSchedule.Scripts\gantt.py
+		PlantSchedule.Scripts\Get-Result.ps1 = PlantSchedule.Scripts\Get-Result.ps1
+		PlantSchedule.Scripts\get_makespan.ps1 = PlantSchedule.Scripts\get_makespan.ps1
+		PlantSchedule.Scripts\plot_evolution_of_worker.m = PlantSchedule.Scripts\plot_evolution_of_worker.m
+		PlantSchedule.Scripts\plot_plant_schedule_results.m = PlantSchedule.Scripts\plot_plant_schedule_results.m
+		PlantSchedule.Scripts\process_data.py = PlantSchedule.Scripts\process_data.py
+		PlantSchedule.Scripts\process_single_solution.py = PlantSchedule.Scripts\process_single_solution.py
+		PlantSchedule.Scripts\product.txt = PlantSchedule.Scripts\product.txt
+		PlantSchedule.Scripts\ps-commands = PlantSchedule.Scripts\ps-commands
+		PlantSchedule.Scripts\results.csv = PlantSchedule.Scripts\results.csv
+		PlantSchedule.Scripts\Run-Inosim.ps1 = PlantSchedule.Scripts\Run-Inosim.ps1
+		PlantSchedule.Scripts\run-simulation.txt = PlantSchedule.Scripts\run-simulation.txt
+		PlantSchedule.Scripts\run_console.ps1 = PlantSchedule.Scripts\run_console.ps1
+		PlantSchedule.Scripts\run_inosim.ps1 = PlantSchedule.Scripts\run_inosim.ps1
+		PlantSchedule.Scripts\run_inosim_2.ps1 = PlantSchedule.Scripts\run_inosim_2.ps1
+		PlantSchedule.Scripts\test.txt = PlantSchedule.Scripts\test.txt
+		PlantSchedule.Scripts\todo.txt = PlantSchedule.Scripts\todo.txt
+		PlantSchedule.Scripts\worker.json = PlantSchedule.Scripts\worker.json
+		PlantSchedule.Scripts\worker_240104_223948.png = PlantSchedule.Scripts\worker_240104_223948.png
+		PlantSchedule.Scripts\worker_240105_141358.png = PlantSchedule.Scripts\worker_240105_141358.png
+		PlantSchedule.Scripts\worker_240105_164700.png = PlantSchedule.Scripts\worker_240105_164700.png
+		PlantSchedule.Scripts\worker_240105_185019.png = PlantSchedule.Scripts\worker_240105_185019.png
+		PlantSchedule.Scripts\worker_240116_104852.png = PlantSchedule.Scripts\worker_240116_104852.png
+		PlantSchedule.Scripts\worker_240116_110800.png = PlantSchedule.Scripts\worker_240116_110800.png
+		PlantSchedule.Scripts\writeTable.vb = PlantSchedule.Scripts\writeTable.vb
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0C695B0A-5053-445B-9F8D-2DE927B29087}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C695B0A-5053-445B-9F8D-2DE927B29087}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C695B0A-5053-445B-9F8D-2DE927B29087}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C695B0A-5053-445B-9F8D-2DE927B29087}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {31FBD291-6E8D-44E5-8459-7427141CCE9F}
+	EndGlobalSection
+EndGlobal

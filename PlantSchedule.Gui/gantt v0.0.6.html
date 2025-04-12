@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gantt + Fitness Plot (Fixed Y‐Limits, Filtered Ops)</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 10px;
+    }
+    #controls {
+      margin-bottom: 10px;
+    }
+    #controls > * {
+      margin-right: 10px;
+      vertical-align: middle;
+    }
+
+    /* Container for Gantt + Fitness Plot side-by-side */
+    #chartSection {
+      display: flex;
+      gap: 20px;
+    }
+
+    /* Gantt container */
+    #chart {
+      border: 1px solid #ccc;
+      position: relative;
+      overflow: auto;
+      resize: both;
+      width: 1300px;
+      height: 600px;
+      min-width: 400px;
+      min-height: 300px;
+    }
+
+    /* Tooltip for Gantt bars */
+    #tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: lightgray;
+      padding: 5px;
+      border: 1px solid #333;
+      border-radius: 3px;
+      font-size: 12px;
+      display: none;
+      white-space: nowrap;
+      z-index: 9999; /* ensure it appears above bars */
+    }
+
+    /* Fitness plot container */
+    #fitnessPlot {
+      border: 1px solid #ccc;
+      resize: both;
+      overflow: auto;
+      width: 600px; 
+      height: 600px; 
+      min-width: 200px;
+      min-height: 200px;
+      position: relative;
+    }
+
+    /* Progress bar for CSV loading */
+    #progressContainer {
+      display: none; /* Hide by default; shown during chunk parsing */
+      width: 300px;
+      height: 20px;
+      border: 1px solid #000;
+      margin-right: 10px;
+      position: relative;
+      vertical-align: middle;
+    }
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background-color: green;
+    }
+
+    /* Orders List */
+    #ordersList {
+      margin-top: 10px;
+      max-height: 500px; /* or as you prefer */
+      overflow-y: auto;  /* scroll if too long */
+      border: 1px solid #ccc;
+      padding: 5px;
+    }
+    #ordersList table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    #ordersList th,
+    #ordersList td {
+      border: 1px solid #ccc;
+      padding: 4px;
+    }
+    #ordersList th {
+      background-color: #f0f0f0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Control Panel -->
+  <div id="controls">
+    <input type="file" id="csvFileInput" accept=".csv">
+    <!-- Progress container (shown while chunk parsing) -->
+    <div id="progressContainer">
+      <div id="progressBar"></div>
+    </div>
+    <span id="progressText"></span>
+
+    <label>
+      Row:
+      <input type="range" id="rowSlider" min="0" value="0" style="width: 120px;">
+    </label>
+    <span id="metadataLabel">Metadata: </span>
+
+    <label>
+      Chart Start:
+      <input type="datetime-local" id="startTimeEdit">
+    </label>
+    <label>
+      Chart End:
+      <input type="datetime-local" id="endTimeEdit">
+    </label>
+    <button id="playButton">Play</button>
+    <label>
+      Delay (ms):
+      <input type="number" id="delaySpinBox" min="1" max="60000" value="1000" style="width: 70px;">
+    </label>
+    <button id="exportButton">Export Gantt</button>
+  </div>
+
+  <!-- Tooltip -->
+  <div id="tooltip"></div>
+
+  <!-- Section for Gantt Chart (left) and Fitness Plot (right) -->
+  <div id="chartSection">
+    <div id="chart"></div>
+    <div id="fitnessPlot"></div>
+  </div>
+
+  <!-- Orders List below the Gantt -->
+  <div id="ordersList">
+    <table>
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Earliest Start</th>
+          <th>Latest End</th>
+          <th>Due Date</th>
+        </tr>
+      </thead>
+      <tbody id="ordersTableBody">
+        <!-- Filled dynamically -->
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // Global variables
+    let csvData = [];           // Holds CSV rows (objects)
+    let currentRowIndex = 0;    // Current slider-selected row
+    let playInterval = null;    // Timer for "Play" mode
+    let maxGeneration = 0;      // We'll store the maximum generation from the entire CSV
+
+    // Papa Parse progress
+    let totalRowsParsed = 0;
+
+    // A global dictionary to track all orders across iterations.
+    // Key: orderName, Value: { dueDate, earliestStart, latestEnd }
+    // earliestStart and latestEnd are Date objects (or null initially)
+    let allOrders = {};
+
+    // ---------------------------
+    // Utility: parse "MM/DD/YYYY hh:mm:ss AM/PM" -> Date
+    function parseDate(dateStr) {
+      if (!dateStr || !dateStr.trim()) return null;
+      const parts = dateStr.trim().split(" ");
+      if (parts.length < 3) {
+        // fallback if we can't parse
+        return new Date(dateStr);
+      }
+      const dateParts = parts[0].split("/");
+      let month = parseInt(dateParts[0], 10);
+      let day   = parseInt(dateParts[1], 10);
+      let year  = parseInt(dateParts[2], 10);
+
+      const timeParts = parts[1].split(":");
+      let hour   = parseInt(timeParts[0], 10);
+      let minute = parseInt(timeParts[1], 10);
+      let second = parseInt(timeParts[2], 10);
+
+      const ampm = parts[2].toUpperCase();
+      if (ampm === "PM" && hour < 12) hour += 12;
+      if (ampm === "AM" && hour === 12) hour = 0;
+
+      return new Date(year, month - 1, day, hour, minute, second);
+    }
+
+    // ---------------------------
+    // Convert a Date to string suitable for <input type="datetime-local">
+    function toLocalDateTimeString(date) {
+      if (!date) return "";
+      const tzOffset = date.getTimezoneOffset() * 60000;
+      let localDate = new Date(date.getTime() - tzOffset);
+      return localDate.toISOString().slice(0, 19);
+    }
+
+    // ---------------------------
+    // Set chart start/end from row 0 "Sim Start" + 32 hours
+    function setFixedTimeRange(row0) {
+      let simStartStr = row0["Sim Start"];
+      let dt = parseDate(simStartStr);
+      if (!dt) return;
+
+      document.getElementById("startTimeEdit").value = toLocalDateTimeString(dt);
+
+      // Add 32 hours for end
+      let endDt = new Date(dt.getTime() + 32 * 3600000);
+      document.getElementById("endTimeEdit").value = toLocalDateTimeString(endDt);
+    }
+
+    // ---------------------------
+    // Main function to redraw everything for the current row.
+    function updateView() {
+      if (csvData.length === 0) return;
+
+      currentRowIndex = parseInt(document.getElementById("rowSlider").value, 10);
+      let row = csvData[currentRowIndex];
+      if (!row) return;
+
+      // --- Update metadata text
+      const metaKeys = ["Generation", "Individual", "Fitness", "Age", "Measure", "Mean", "Std"];
+      let metaText = "Metadata: ";
+      metaKeys.forEach(key => {
+        metaText += `${key}: ${row[key] || ""} | `;
+      });
+      document.getElementById("metadataLabel").innerText = metaText;
+
+      // --- Time range
+      let startDt = new Date(document.getElementById("startTimeEdit").value);
+      let endDt   = new Date(document.getElementById("endTimeEdit").value);
+      let timeRange = [startDt, endDt];
+
+      // --- Simulation start (for red vertical line)
+      let simStart = row["Sim Start"];
+
+      // --- The schedule JSON is in the last column
+      let values  = Object.values(row);
+      let jsonStr = values[values.length - 1];
+      let scheduleData = {};
+      try {
+        scheduleData = JSON.parse(jsonStr);
+      } catch (e) {
+        console.error("Error parsing JSON:", e);
+      }
+      let resources = scheduleData["Resources"] || [];
+      let ordersList = scheduleData["Orders"] || [];
+
+      // Draw Gantt
+      plotGantt(resources, timeRange, simStart);
+
+      // Update the fitness chart (from row 0 up to currentRowIndex)
+      // We'll pass the entire slice, but the x domain is fixed from [0, maxGeneration]
+      plotFitness(csvData.slice(0, currentRowIndex + 1));
+
+      // Update orders info
+      updateOrdersList(resources, ordersList);
+    }
+
+    // ---------------------------
+    // Gantt Chart with D3
+    function plotGantt(resources, timeRange, simStart) {
+      // Clear existing
+      d3.select("#chart").select("svg").remove();
+
+      // Dimensions
+      const chartDiv = document.getElementById("chart");
+      const width  = chartDiv.clientWidth  - 60; 
+      const height = chartDiv.clientHeight - 60;
+
+      const margin = { top: 40, right: 20, bottom: 40, left: 100 };
+      const innerW = Math.max(width  - margin.left - margin.right, 50);
+      const innerH = Math.max(height - margin.top  - margin.bottom, 50);
+
+      const svg = d3.select("#chart")
+        .append("svg")
+        .attr("width",  width)
+        .attr("height", height)
+        .append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+      // Title
+      svg.append("text")
+         .attr("x", innerW / 2)
+         .attr("y", -margin.top / 2)
+         .attr("text-anchor", "middle")
+         .style("font-size", "16px")
+         .text("Gantt Chart");
+
+      // X scale
+      const x = d3.scaleTime()
+                  .domain(timeRange)
+                  .range([0, innerW]);
+
+      // Y scale: resource names
+      const resourceNames = resources.map(r => r["Name"] || "Unknown");
+      const y = d3.scaleBand()
+                  .domain(resourceNames)
+                  .range([0, innerH])
+                  .padding(0.1);
+
+      // X axis
+      svg.append("g")
+         .attr("transform", `translate(0,${innerH})`)
+         .call(d3.axisBottom(x).ticks(6));
+
+      // Y axis
+      svg.append("g")
+         .call(d3.axisLeft(y));
+
+      // Color function
+      function getColor(opName, opOrder) {
+        let c = "blue";
+        let nameLower = opName.toLowerCase();
+        if (nameLower.includes("process")) {
+          c = "lightblue";
+          if (opOrder && opOrder.includes("Rush")) {
+            c = "red";
+          }
+        } else if (nameLower.includes("changeover")) {
+          c = "gray";
+          if (opOrder && opOrder.includes("Rush")) {
+            c = "orange";
+          }
+        } else if (nameLower.includes("wait") || nameLower.includes("idle")) {
+          c = "white";
+        }
+        return c;
+      }
+
+      // Plot bars
+      resources.forEach(resource => {
+        const ops = resource["Operations"] || [];
+        ops.forEach(op => {
+          let startStr = op["Start"];
+          let endStr   = op["End"];
+          if (!startStr || !endStr) return;
+          let startTime = new Date(startStr);
+          let endTime   = new Date(endStr);
+          // Skip if outside range
+          if (endTime < timeRange[0] || startTime > timeRange[1]) return;
+
+          // Clip to range
+          if (startTime < timeRange[0]) startTime = timeRange[0];
+          if (endTime   > timeRange[1]) endTime   = timeRange[1];
+
+          const opName  = op["Name"]  || "";
+          const opOrder = op["Order"] || "";
+          const color   = getColor(opName, opOrder);
+
+          svg.append("rect")
+             .attr("x", x(startTime))
+             .attr("y", y(resource["Name"] || "Unknown"))
+             .attr("width",  x(endTime) - x(startTime))
+             .attr("height", y.bandwidth())
+             .attr("fill", color)
+             .attr("stroke", "black")
+             .on("mouseover", (event) => {
+               const tooltip = d3.select("#tooltip");
+               // Build tooltip text
+               let text = "";
+               Object.entries(op).forEach(([k, v]) => {
+                 text += `${k}: ${v}<br/>`;
+               });
+               tooltip.html(text)
+                 .style("left", (event.pageX + 10) + "px")
+                 .style("top",  (event.pageY + 10) + "px")
+                 .style("display", "block");
+             })
+             .on("mouseout", () => {
+               d3.select("#tooltip").style("display", "none");
+             });
+        });
+      });
+
+      // Sim start line
+      if (simStart) {
+        let simStartDate = parseDate(simStart);
+        if (simStartDate) {
+          let lineX = x(simStartDate);
+          // only draw if within range
+          if (lineX >= 0 && lineX <= innerW) {
+            svg.append("line")
+               .attr("x1", lineX)
+               .attr("x2", lineX)
+               .attr("y1", 0)
+               .attr("y2", innerH)
+               .attr("stroke", "red")
+               .attr("stroke-dasharray", "5,5");
+          }
+        }
+      }
+    }
+
+    // ---------------------------
+    // Fitness vs. Generation Plot
+    // Y-limit fixed at [-5, 5]
+    // X-limit from [0, maxGeneration] (found after CSV load)
+    function plotFitness(dataSlice) {
+      // Clear existing
+      d3.select("#fitnessPlot").select("svg").remove();
+
+      const plotDiv = document.getElementById("fitnessPlot");
+      const width  = plotDiv.clientWidth  - 50;
+      const height = plotDiv.clientHeight - 50;
+      const margin = { top: 30, right: 20, bottom: 40, left: 50 };
+      const innerW = Math.max(width  - margin.left - margin.right, 50);
+      const innerH = Math.max(height - margin.top  - margin.bottom, 50);
+
+      const svg = d3.select("#fitnessPlot")
+        .append("svg")
+        .attr("width",  width)
+        .attr("height", height)
+        .append("g")
+        .attr("transform", `translate(${margin.left}, ${margin.top})`);
+
+      // Title
+      svg.append("text")
+         .attr("x", innerW / 2)
+         .attr("y", -10)
+         .attr("text-anchor", "middle")
+         .style("font-size", "14px")
+         .text("Fitness over Generations");
+
+      // Convert "Generation" and "Fitness" to numeric
+      let points = dataSlice.map(row => {
+        return {
+          generation: parseFloat(row["Generation"]) || 0,
+          fitness:    parseFloat(row["Fitness"])    || 0
+        };
+      });
+
+      // X scale: [0, maxGeneration]
+      const x = d3.scaleLinear()
+                  .domain([0, maxGeneration])  // fixed from CSV's max generation
+                  .range([0, innerW]);
+
+      // Y scale: fixed [-5, 5]
+      const y = d3.scaleLinear()
+                  .domain([-5, 5])
+                  .range([innerH, 0]);
+
+      // Axes
+      svg.append("g")
+         .attr("transform", `translate(0, ${innerH})`)
+         .call(d3.axisBottom(x));
+      svg.append("g")
+         .call(d3.axisLeft(y));
+
+      // Create a line generator
+      const line = d3.line()
+        .x(d => x(d.generation))
+        .y(d => y(d.fitness))
+        .curve(d3.curveLinear);
+
+      // Sort points by generation if needed
+      points.sort((a, b) => a.generation - b.generation);
+
+      // Draw line
+      svg.append("path")
+         .datum(points)
+         .attr("fill", "none")
+         .attr("stroke", "steelblue")
+         .attr("stroke-width", 2)
+         .attr("d", line);
+    }
+
+    // ---------------------------
+    // Build the orders list. For each row, we have an array "Orders" and a "Resources" list.
+    // We want to track all orders ever seen, with earliest start, latest end, and due date.
+    // The due date comes from the "Orders" array, while earliest start / latest end come from the resources ops.
+
+    function updateOrdersList(resources, ordersArray) {
+      // Update allOrders with any new orders or new due dates from this iteration
+      ordersArray.forEach(orderObj => {
+        let oName = orderObj.Name;
+        if (!oName) return;
+        if (!allOrders[oName]) {
+          // create a new record
+          allOrders[oName] = {
+            dueDate: null,
+            earliestStart: null,
+            latestEnd: null
+          };
+        }
+        // set or update dueDate
+        if (orderObj.DueDate) {
+          allOrders[oName].dueDate = orderObj.DueDate; // store as string
+        }
+      });
+
+      // Now, from resources' operations, update earliestStart / latestEnd.
+      // We'll check op.Order to find which order it belongs to.
+      resources.forEach(resource => {
+        const ops = resource.Operations || [];
+        ops.forEach(op => {
+          let oName = op.Order;
+          if (!oName) return; // skip if no order info
+
+          // Ensure we have a record for this order, even if it's not in the Orders list
+          // (some orders might have been removed from the Orders array but still remain in ops)
+          if (!allOrders[oName]) {
+            allOrders[oName] = {
+              dueDate: null,
+              earliestStart: null,
+              latestEnd: null
+            };
+          }
+
+          // Update earliest / latest times
+          let startStr = op.Start;
+          let endStr   = op.End;
+          if (startStr) {
+            let startDate = new Date(startStr);
+            let existingStart = allOrders[oName].earliestStart;
+            if (!existingStart || startDate < existingStart) {
+              allOrders[oName].earliestStart = startDate;
+            }
+          }
+          if (endStr) {
+            let endDate = new Date(endStr);
+            let existingEnd = allOrders[oName].latestEnd;
+            if (!existingEnd || endDate > existingEnd) {
+              allOrders[oName].latestEnd = endDate;
+            }
+          }
+        });
+      });
+
+      // Now rebuild the table from allOrders.
+      // The user wants an order list with columns: [Order, earliest start, latest end, due date].
+
+      const tbody = document.getElementById("ordersTableBody");
+      tbody.innerHTML = ""; // clear
+
+      // Convert allOrders from object to array to sort by name.
+      let allOrdersArray = Object.keys(allOrders).sort().map(oName => {
+        return {
+          name: oName,
+          dueDate: allOrders[oName].dueDate,
+          earliestStart: allOrders[oName].earliestStart,
+          latestEnd: allOrders[oName].latestEnd
+        };
+      });
+
+      allOrdersArray.forEach(orderRec => {
+        let tr = document.createElement("tr");
+
+        let tdName = document.createElement("td");
+        tdName.textContent = orderRec.name;
+
+        let tdEarliest = document.createElement("td");
+        tdEarliest.textContent = orderRec.earliestStart ? orderRec.earliestStart.toISOString() : "";
+
+        let tdLatest = document.createElement("td");
+        tdLatest.textContent = orderRec.latestEnd ? orderRec.latestEnd.toISOString() : "";
+
+        let tdDue = document.createElement("td");
+        tdDue.textContent = orderRec.dueDate || "";
+
+        tr.appendChild(tdName);
+        tr.appendChild(tdEarliest);
+        tr.appendChild(tdLatest);
+        tr.appendChild(tdDue);
+        tbody.appendChild(tr);
+      });
+    }
+
+    // ---------------------------
+    // CSV loading (Papa Parse, chunk mode)
+    document.getElementById("csvFileInput").addEventListener("change", function (event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      // Reset
+      csvData = [];
+      totalRowsParsed = 0;
+      maxGeneration = 0;
+      allOrders = {}; // clear the global orders dictionary as we load new CSV
+
+      const progressContainer = document.getElementById("progressContainer");
+      const progressBar       = document.getElementById("progressBar");
+      const progressText      = document.getElementById("progressText");
+      progressContainer.style.display = "inline-block";
+      progressBar.style.width = "0%";
+      progressText.innerText  = "Parsing 0%";
+
+      Papa.parse(file, {
+        header: true,
+        delimiter: ";",
+        skipEmptyLines: true,
+        chunkSize: 1024 * 1024, // 1MB chunk
+        chunk: function(results, parser) {
+          // For each row, track maximum generation
+          results.data.forEach(row => {
+            csvData.push(row);
+            let genVal = parseFloat(row["Generation"]);
+            if (!isNaN(genVal)) {
+              if (genVal > maxGeneration) {
+                maxGeneration = genVal;
+              }
+            }
+          });
+
+          // Update progress by file bytes read (if available)
+          if (parser.streamer && parser.streamer._handle) {
+            let filePos = parser.streamer._handle.bytesRead;
+            let fileSize = file.size;
+            let pct = fileSize ? Math.floor((filePos / fileSize) * 100) : 0;
+            progressBar.style.width = pct + "%";
+            progressText.innerText  = `Parsing ${pct}%`;
+          } else {
+            totalRowsParsed += results.data.length;
+            progressText.innerText = `Parsed rows: ${totalRowsParsed}`;
+          }
+        },
+        complete: function() {
+          progressContainer.style.display = "none";
+          progressText.innerText = "";
+
+          if (csvData.length > 0) {
+            let slider = document.getElementById("rowSlider");
+            slider.max = csvData.length - 1;
+            slider.value = 0;
+
+            // set chart range from row 0
+            setFixedTimeRange(csvData[0]);
+
+            // maxGeneration is now set
+            updateView();
+          }
+        }
+      });
+    });
+
+    // ---------------------------
+    // Slider change
+    document.getElementById("rowSlider").addEventListener("input", updateView);
+
+    // Time range changes
+    document.getElementById("startTimeEdit").addEventListener("change", updateView);
+    document.getElementById("endTimeEdit").addEventListener("change", updateView);
+
+    // Play/Pause button
+    document.getElementById("playButton").addEventListener("click", function () {
+      const btn = this;
+      if (btn.innerText === "Play") {
+        btn.innerText = "Pause";
+        const delay = parseInt(document.getElementById("delaySpinBox").value, 10);
+        playInterval = setInterval(() => {
+          const slider = document.getElementById("rowSlider");
+          let newVal = parseInt(slider.value, 10) + 1;
+          if (newVal > parseInt(slider.max, 10)) {
+            newVal = 0; // loop to start
+          }
+          slider.value = newVal;
+          updateView();
+        }, delay);
+      } else {
+        btn.innerText = "Play";
+        clearInterval(playInterval);
+      }
+    });
+
+    // Export Gantt as SVG
+    document.getElementById("exportButton").addEventListener("click", function () {
+      const svgElement = document.querySelector("#chart svg");
+      if (!svgElement) {
+        alert("No gantt chart to export.");
+        return;
+      }
+      const serializer = new XMLSerializer();
+      let source = serializer.serializeToString(svgElement);
+      // Add namespaces if needed
+      if (!source.match(/^<svg[^>]+xmlns="http:\/\/www.w3.org\/2000\/svg"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      if (!source.match(/^<svg[^>]+"http:\/\/www.w3.org\/1999\/xlink"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+      }
+      source = '<?xml version="1.0" standalone="no"?>\r\n' + source;
+      const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(source);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "gantt_chart.svg";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+  </script>
+</body>
+</html>

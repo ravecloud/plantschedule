@@ -1,0 +1,101 @@
+Reasons for dynamic scheduling
+- Unforseen events (machien breakdowns, rush orders, material shortage, yield)
+- maintain continuous production
+- 
+
+Why do we use simulation models?
+
+What is the overall question?
+
+Startegy
+- Minimize changes between initial and rescheduled schedule
+-- incur additional setup and transportation cost (is this really the case?)
+
+Approximate methods
+- medium-sized problems are nearly impossible to find exact solutions
+- use metaheuristics to solve larger problems within acceptable time
+- trade-off between longer computation times and deteriorating solution quality
+-- (our methods aims to overcome the trade-off between longer computation times and solution quality)
+
+
+[A survey of job shop scheduling problem: the types and models]
+Trade-off Between Computation Time and Solution Quality:
+    Computation Times: Metaheuristic methods may take significantly longer to find solutions as problem size grows, especially when trying to find high-quality or optimal solutions.
+    Solution Quality: Alternatively, if the computation time is restricted (e.g., due to practical constraints), the quality of the solutions generated may deteriorate. This happens because larger problem sizes typically require more exploration and evaluation to find good solutions, and insufficient computational resources can lead to suboptimal results.
+
+Scaling Challenges:
+    For smaller problems, metaheuristics often perform well, balancing efficiency and effectiveness.
+    As problem sizes increase, the algorithms might struggle to maintain both speed and quality due to the complexity and search space explosion that typically accompanies larger problems.
+
+-> To use metaheurisics is advantageous but also encounters limitations due to exponentially growing computation times
+
+Our approach tries to overcome these trade-offs by...
+1. Conservation of the population and individual solution quality 
+2. Warm-start of the EA
+3. 
+
+***
+An effective hybrid multi objective evolutionary algorithm for solving real
+time event in flexible job shop scheduling problem (2018)
+
+
+Performance measures: minimization of makespan and minimization of total machine load
+***
+
+***
+Simulation optimization applied to production scheduling in the era of industry 4.0: A review and future roadmap
+
+Production scheduling (PS):
+- impacts tactical and strategical levels of decision making
+- efficiency towards the whole supply chain
+
+Simulation Optimization (SO):
+- a growing Decision support tool (DST)
+
+SOAP - Simulation Optimization Applied to Production Scheduling
+- Real-time and efficient SO-based DST for PS modules
+
+Performance of a manufacturing system
+- produce products competitively and sustainably
+
+Manufacturing system (hierarchy)
+- Network of manufacturing plants
+- workstations inside the manufacturing plants
+- production steps within each workstation
+
+Strategic decisions
+- macro-level buisness (long-term planning horizon)
+- between manufacturing plants
+
+Tactical decisions
+- decisions at the manufacturing plant level
+- mid-term planning horizon
+
+Operational decisions
+- production plant (workstation plans, order scheduling)
+- short term
+
+-> Decisions are different but hierarchicalnaligend
+
+Scheduling (Cambridge): activity of planning the times at which tasks will be done or events occur
+- key role in enhancing competitiveness (value creation process) [A data-driven scheduling approach to smart manufacturing 2019]
+- scheduling based decision making is one of the most complex optimization problems
+
+Reactive/proactive scheduling
+- real-time data collection and processing
+- how to collet and process data 
+- run reactive/proactive real-time and dynamic scheduling
+
+
+
+
+
+***
+
+
+
+
+
+
+
+

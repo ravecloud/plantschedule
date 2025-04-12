@@ -1,0 +1,9 @@
+﻿{
+    "PopulationSize": 20,
+    "OffspringSize": 20,
+    "ParentsSize": 10,
+    "MutationRate": 0.1,
+    "CrossoverRate": 0.8,
+    "Initialization": "Worker",
+    "Objective": "Tardiness"
+}
