@@ -323,27 +323,20 @@ public class CSharpSimulator : ISimulator
                         }
                     }
                 }
-
+                // Make the changeover a state of the order. Thereafter put the order in the resource again for which the changeover was done.
                 switch (state)
                 {
+                    case "Changeover":
+                        StepAfterChangeover(order, resources, nextStage);
+                        continue;
                     // define maintenance as an order?
-                    case "Wait":
-                        // Only go in the wait state of the stage if it needs to be processed on this stage. Otherwise skip stage
-                        Step(order, resources, nextStage);
-                        break;
-                    case "Process":
-                        // Only go in the wait state of the stage if it needs to be processed on this stage. Otherwise skip stage
-                        Step(order, resources, nextStage);
-                        break;
                     case "End":
                         // Check if the next stage has orders to allocate or if it is the last stage before the actual end!
                         //Console.WriteLine();
                         break;
                     default:
-                        if (order.Operations.Last().Name.Contains("Changeover"))
-                        {
-                            order.Operations.RemoveAt(order.Operations.Count() - 1);
-                        }
+                        // Default is Process or Wait
+                        Step(order, resources, nextStage);
                         break;
                 }
             }
@@ -438,7 +431,7 @@ public class CSharpSimulator : ISimulator
             {
                 foreach (var operation in resource.Operations)
                 {
-                    if (operation.Name.Contains("Process")) // || operation.Name.Contains("Changeover"))
+                    if (operation.Name.Contains("Process") || operation.Name.Contains("Changeover"))
                     {
                         var orderIdx = orders.FindIndex(x => x.Name == operation.Order);
                         if (orderIdx > -1)
@@ -884,6 +877,42 @@ public class CSharpSimulator : ISimulator
         }
         return changeoverTime;
     }
+    private void StepAfterChangeover(Order order, List<Resource> resources, string stage)
+    {
+        // get the current operation
+        var operation = order.Operations.Last();
+
+        // find the resource the last opeartion was on
+        var resource = resources.Find(x => x.Name == order.Operations.Last().Unit);
+
+        // find the earliest possible start and end 
+
+        var orderEnd = order.Operations.Max(x => x.End);
+        //var orderEnd = order.Operations.Last().End;
+        var resourceEnd = resource.Operations.Last().End;
+        var start = (resourceEnd > orderEnd) switch
+        {
+            true => resourceEnd,
+            false => orderEnd
+        };
+        var duration = ProcessTimes[(order.Name.Split("_").First(), resource.Name)];
+
+        // add operation to order and resource
+        var nextOperation = new Operation
+        {
+            Name = "Process_" + operation.Name.Split("_")[1],
+            Duration = duration,
+            Start = start,
+            End = start.AddHours(duration),
+            Order = order.Name,
+            Unit = resource.Name
+        };
+
+        resource.Operations.Add(nextOperation);
+        order.Operations.Add(nextOperation);
+
+    }
+
     private void Step(Order order, List<Resource> resources, string stage)
     {
         // Only go in the wait state of the stage if it needs to be processed on this stage. Otherwise skip stage
