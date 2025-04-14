@@ -408,7 +408,6 @@ public class EvolutionaryAlgorithm
             }
         };
     }
-
     private void ChangeEAParameters(EvolutionaryAlgorithm ea, int countDuplicates)
     {
         var avgMeasure = ea.Population[1..].Average(x => x.Measure); // < ea.Population.Count - 5;
@@ -636,7 +635,6 @@ public class EvolutionaryAlgorithm
         ResultsWriter.Flush();
     }
     
-
     private void RemoveOperationsAfterStartFromResources(List<Resource> resources)
     { //TODO: Add tabu list of orders
         var tabuOrdersList = new List<string>();
@@ -818,7 +816,6 @@ public class EvolutionaryAlgorithm
             }
         }
     }
-
 
     private void CopyGenesToPopulation(Worker w, Individual p, List<Order> copyOrders, List<Resource> copyResources)
     {
@@ -1181,6 +1178,7 @@ public class EvolutionaryAlgorithm
         var copyResources = Simulator.CopyResources(p.Worker.Resources);
 
         RemoveFinishedOrders(w, p);
+        RemoveFinishedOperationsFromOrders(w.Orders, w.Resources);
         RemoveFinishedOperations(w.Resources);
         // RepairSchedules!!
         ConcatGenes(w, p, copyOrders, copyResources);
@@ -1202,6 +1200,7 @@ public class EvolutionaryAlgorithm
                 w.Orders.RemoveAt(i);
                 i--;
             }
+            /*
             else
             {
                 var order = w.Orders[i];
@@ -1216,6 +1215,7 @@ public class EvolutionaryAlgorithm
                     End = this.Config.SimulationStart
                 });
             }
+            */
         }
 
         if (w.Orders.Count == 0)
@@ -1224,6 +1224,38 @@ public class EvolutionaryAlgorithm
             this.Log(LogOption.End, message: "All orders finished!");
             Environment.Exit(0);
         }
+    }
+    private void RemoveFinishedOperationsFromOrders(List<Order> order, List<Resource> resources)
+    {
+        var operationsToRemove = new List<Operation>();
+        foreach (var o in order)
+        {
+            var rangeIndex = o.Operations.Count;
+            for (int i = 0; i < o.Operations.Count - 1; i++)
+            {
+                var op = o.Operations[i];
+                if(op.Start >= this.SimulationStart)
+                {
+                    rangeIndex = i;
+                    break;
+                }
+            }
+            // remove all orders after the first order that is not in the range anymore.
+            operationsToRemove = o.Operations.GetRange(rangeIndex, o.Operations.Count - rangeIndex);
+            o.Operations.RemoveRange(rangeIndex, o.Operations.Count - rangeIndex);
+        }
+        
+        // remove all opeations from the resources list
+        foreach(var o in operationsToRemove)
+        {
+            var r = resources.Find(r => r.Name == o.Unit);
+            if(r != null)
+            {
+                var i = r.Operations.FindIndex(op  => op == o);
+                r.Operations.RemoveAt(i);
+            }
+        }
+
     }
     private void RemoveFinishedOperations(List<Resource> resources)
     {
@@ -1240,8 +1272,13 @@ public class EvolutionaryAlgorithm
                     if (op.Name.Contains("Maintenance"))
                     {
                         resource.Maintenance.Add(new(op.Start, op.End));
+                        resource.Operations.RemoveAt(i);
                     }
-                    resource.Operations.RemoveAt(i);
+                    else
+                    {
+                        // resource.Operations.RemoveAt(i);
+                    }
+
                 }
             }
             if (operations.Count == 0)

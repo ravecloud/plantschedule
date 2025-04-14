@@ -885,9 +885,9 @@ public class CSharpSimulator : ISimulator
         // find the resource the last opeartion was on
         var resource = resources.Find(x => x.Name == order.Operations.Last().Unit);
 
-        // find the earliest possible start and end 
-
+        // find the earliest possible start and end. Should be of all operations because some operations could theoretically end later
         var orderEnd = order.Operations.Max(x => x.End);
+
         //var orderEnd = order.Operations.Last().End;
         var resourceEnd = resource.Operations.Last().End;
         var start = (resourceEnd > orderEnd) switch
