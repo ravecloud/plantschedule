@@ -345,6 +345,8 @@ public class CSharpSimulator : ISimulator
 
         EvaluateObjectives(ind);
     }
+     
+    // TODO: The problem is the mutation and crossover!!!
 
     private void InitWorker(Individual ind, Gene<string> orderGene)
     {

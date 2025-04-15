@@ -7,7 +7,6 @@ namespace PlantSchedule.DTO {
         public String Material { get; set; }
         public String UVP { get; set; }
         public int FillingType { get; set; }
-        public List<Intermediate> Intermediates { get; set; } = new List<Intermediate>();
         public List<String> FormLines { get; set; } = new List<String>();
         public List<String> FillLines { get; set; } = new List<String>();
         public DateTime StartDate { get; set; }

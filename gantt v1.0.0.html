@@ -1,0 +1,620 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gantt + Fitness Plot (Multi-Order Highlighting)</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <style>
+        /* Basic body styling */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 10px;
+        }
+        /* Styling for the control panel */
+        #controls {
+            margin-bottom: 10px;
+        }
+
+            #controls > * {
+                margin-right: 10px;
+                vertical-align: middle;
+            }
+
+        /* Container for Gantt + Fitness Plot side-by-side layout using flexbox */
+        #chartSection {
+            display: flex;
+            gap: 20px; /* Space between the two charts */
+        }
+
+        /* Gantt chart container styling */
+        #chart {
+            border: 1px solid #ccc;
+            position: relative; /* Needed for absolute positioning of tooltip */
+            overflow: auto; /* Allows scrolling if content exceeds dimensions */
+            resize: both; /* Allows user resizing */
+            width: 1300px; /* Initial width */
+            height: 600px; /* Initial height */
+            min-width: 400px; /* Minimum resizing width */
+            min-height: 300px; /* Minimum resizing height */
+        }
+
+        /* Tooltip styling for Gantt bars */
+        #tooltip {
+            position: absolute; /* Position relative to the #chart container */
+            pointer-events: none; /* Tooltip should not interfere with mouse events */
+            background: lightgray;
+            padding: 5px;
+            border: 1px solid #333;
+            border-radius: 3px;
+            font-size: 12px;
+            display: none; /* Hidden by default */
+            white-space: nowrap; /* Prevent text wrapping */
+            z-index: 9999; /* Ensure tooltip appears above other elements */
+        }
+
+        /* Fitness plot container styling */
+        #fitnessPlot {
+            border: 1px solid #ccc;
+            resize: both; /* Allows user resizing */
+            overflow: auto; /* Allows scrolling if content exceeds dimensions */
+            width: 600px; /* Initial width */
+            height: 600px; /* Initial height */
+            min-width: 200px; /* Minimum resizing width */
+            min-height: 200px; /* Minimum resizing height */
+            position: relative; /* For potential future absolutely positioned elements */
+        }
+
+        /* Progress bar container for CSV loading */
+        #progressContainer {
+            display: none; /* Hide by default; shown during chunk parsing */
+            width: 300px;
+            height: 20px;
+            border: 1px solid #000;
+            margin-right: 10px;
+            position: relative; /* For positioning the progress bar inside */
+            vertical-align: middle; /* Align with other controls */
+        }
+        /* The actual progress bar element */
+        #progressBar {
+            width: 0%; /* Starts at 0 width */
+            height: 100%;
+            background-color: green;
+        }
+
+        /* Orders List table styling */
+        #ordersList {
+            margin-top: 10px;
+            max-height: 1000px; /* Limit height */
+            overflow-y: auto; /* Add vertical scroll if content exceeds max-height */
+            border: 1px solid #ccc;
+            padding: 5px;
+        }
+
+            #ordersList table {
+                border-collapse: collapse; /* Clean table borders */
+                width: 100%;
+            }
+
+            #ordersList th,
+            #ordersList td {
+                border: 1px solid #ccc;
+                padding: 4px;
+                text-align: left; /* Align text to the left */
+            }
+
+            #ordersList th {
+                background-color: #f0f0f0; /* Light gray background for headers */
+                position: sticky; /* Make headers stick to the top when scrolling */
+                top: 0;
+            }
+            /* Style for clickable rows in the orders table */
+            #ordersList tbody tr {
+                cursor: pointer; /* Indicate rows are clickable */
+            }
+
+                #ordersList tbody tr:hover {
+                    background-color: #f5f5f5; /* Light hover effect */
+                }
+        /* Style for the selected row(s) in the orders table */
+        .selected-order-row {
+            background-color: #e0e0ff !important; /* Light blue highlight, !important overrides hover */
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <input type="file" id="csvFileInput" accept=".csv">
+        <div id="progressContainer">
+            <div id="progressBar"></div>
+        </div>
+        <span id="progressText"></span> <label>
+            Row:
+            <input type="range" id="rowSlider" min="0" value="0" style="width: 120px;">
+        </label>
+        <span id="metadataLabel">Metadata: </span>
+
+        <label>
+            Chart Start:
+            <input type="datetime-local" id="startTimeEdit">
+        </label>
+        <label>
+            Chart End:
+            <input type="datetime-local" id="endTimeEdit">
+        </label>
+        <button id="playButton">Play</button>
+        <label>
+            Delay (ms):
+            <input type="number" id="delaySpinBox" min="1" max="60000" value="1000" style="width: 70px;">
+        </label>
+        <button id="exportButton">Export Gantt</button>
+    </div>
+
+    <div id="tooltip"></div>
+
+    <div id="chartSection">
+        <div id="chart"></div> <div id="fitnessPlot"></div>
+    </div>
+
+    <div id="ordersList">
+        <table>
+            <thead>
+                <tr>
+                    <th>Order</th>
+                    <th>Earliest Start</th>
+                    <th>Latest End</th>
+                    <th>Due Date</th>
+                    <th>Machines</th>
+                    <th>End - Due (hrs)</th>
+                </tr>
+            </thead>
+            <tbody id="ordersTableBody">
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+    // --- Global Variables ---
+    let csvData = [];         // Holds all CSV rows as objects after parsing
+    let currentRowIndex = 0;  // Index of the currently selected row via slider
+    let playInterval = null;  // Timer ID for the "Play" animation interval
+    let maxGeneration = 0;    // Maximum 'Generation' value found in the CSV, used for fitness plot X-axis
+    let totalRowsParsed = 0;  // Counter for rows parsed (used if file size isn't available for progress)
+
+    // Global dictionary to track all unique orders encountered across all CSV rows (iterations).
+    let allOrders = {};
+
+    // **NEW**: Stores the names of MULTIPLE selected orders using a Set for efficient add/delete/check.
+    let selectedOrderNames = new Set();
+
+    // **NEW**: Predefined list of colors for highlighting multiple orders.
+    const highlightColors = ['orange', 'cyan', '#87CEEB', 'lime', 'magenta', '#FFD700', '#FF69B4', '#3CB371', '#FF7F50', '#9370DB', '#00CED1', '#FA8072']; // Added more colors
+
+
+    // Cache for the last data used to plot the Gantt chart, to allow redrawing without full update
+    let lastGanttResources = [];
+    let lastGanttTimeRange = [];
+    let lastGanttSimStart = null;
+
+
+    // ---------------------------
+    // Utility Function: Parses a specific date string format "MM/DD/YYYY hh:mm:ss AM/PM" into a JavaScript Date object.
+    // Includes a fallback for other potential date formats.
+    // ---------------------------
+    function parseDate(dateStr) {
+      if (!dateStr || !dateStr.trim()) return null;
+      const parts = dateStr.trim().split(" ");
+      if (parts.length < 3) {
+        console.warn("Attempting fallback date parsing for:", dateStr);
+        const fallbackDate = new Date(dateStr);
+        return isNaN(fallbackDate.getTime()) ? null : fallbackDate;
+      }
+      const dateParts = parts[0].split("/");
+      if (dateParts.length !== 3) return new Date(dateStr);
+      let month = parseInt(dateParts[0], 10), day = parseInt(dateParts[1], 10), year = parseInt(dateParts[2], 10);
+      const timeParts = parts[1].split(":");
+      if (timeParts.length !== 3) return new Date(dateStr);
+      let hour = parseInt(timeParts[0], 10), minute = parseInt(timeParts[1], 10), second = parseInt(timeParts[2], 10);
+      const ampm = parts[2].toUpperCase();
+      if (ampm === "PM" && hour < 12) hour += 12;
+      if (ampm === "AM" && hour === 12) hour = 0;
+      if (isNaN(year) || isNaN(month) || isNaN(day) || isNaN(hour) || isNaN(minute) || isNaN(second)) {
+          console.error("Invalid date components parsed from:", dateStr); return null;
+      }
+      return new Date(year, month - 1, day, hour, minute, second);
+    }
+
+    // ---------------------------
+    // Utility Function: Converts a JavaScript Date object into a string format suitable for the datetime-local input type.
+    // ---------------------------
+    function toLocalDateTimeString(date) {
+      if (!date || isNaN(date.getTime())) return "";
+      try {
+          const tzOffset = date.getTimezoneOffset() * 60000;
+          let localDate = new Date(date.getTime() - tzOffset);
+          return localDate.toISOString().slice(0, 19);
+      } catch (e) {
+          console.error("Error converting date to local string:", date, e); return "";
+      }
+    }
+
+    // ---------------------------
+    // Function: Sets the initial Gantt chart time range based on the first row's "Sim Start".
+    // ---------------------------
+    function setFixedTimeRange(row0) {
+      let simStartStr = row0["Sim Start"];
+      if (!simStartStr) { console.warn("First row missing 'Sim Start'."); return; }
+      let dt = parseDate(simStartStr);
+      if (!dt) { console.error("Could not parse 'Sim Start' date:", simStartStr); return; }
+      document.getElementById("startTimeEdit").value = toLocalDateTimeString(dt);
+      let endDt = new Date(dt.getTime() + 32 * 3600 * 1000); // +32 hours
+      document.getElementById("endTimeEdit").value = toLocalDateTimeString(endDt);
+    }
+
+    // ---------------------------
+    // Function to redraw only the Gantt chart using cached data.
+    // ---------------------------
+    function redrawGanttOnly() {
+        // Check if cached data is valid (allow empty resources array)
+        if (lastGanttResources && lastGanttTimeRange && lastGanttTimeRange.length === 2) {
+             plotGantt(lastGanttResources, lastGanttTimeRange, lastGanttSimStart);
+        } else {
+             console.warn("Cannot redraw Gantt: Previous data not available or invalid.");
+        }
+    }
+
+    // ---------------------------
+    // Main Function: Updates all visual elements based on the current CSV row.
+    // Order selection persists across updates.
+    // ---------------------------
+    function updateView() {
+      if (csvData.length === 0) return;
+
+      // Get and validate current row index
+      currentRowIndex = parseInt(document.getElementById("rowSlider").value, 10);
+      if (currentRowIndex < 0 || currentRowIndex >= csvData.length) {
+          console.warn("Invalid currentRowIndex:", currentRowIndex);
+          currentRowIndex = 0; document.getElementById("rowSlider").value = 0;
+      }
+      let row = csvData[currentRowIndex];
+      if (!row) return;
+
+      // --- Order selection state (selectedOrderNames) is PERSISTENT ---
+
+      // --- Update metadata text display ---
+      const metaKeys = ["Generation", "Individual", "Fitness", "Age", "Measure", "Mean", "Std"];
+      let metaText = "Metadata: ";
+      metaKeys.forEach(key => { metaText += `${key}: ${row.hasOwnProperty(key) ? row[key] : ""} | `; });
+      document.getElementById("metadataLabel").innerText = metaText.slice(0, -3);
+
+      // --- Get and validate Gantt chart time range ---
+      let startDtStr = document.getElementById("startTimeEdit").value;
+      let endDtStr   = document.getElementById("endTimeEdit").value;
+      let startDt = startDtStr ? new Date(startDtStr) : null;
+      let endDt   = endDtStr ? new Date(endDtStr) : null;
+      if (!startDt || isNaN(startDt.getTime()) || !endDt || isNaN(endDt.getTime()) || startDt >= endDt) {
+          console.warn("Invalid time range selected. Resetting to default based on row 0.");
+          if (csvData.length > 0) setFixedTimeRange(csvData[0]);
+          startDt = new Date(document.getElementById("startTimeEdit").value);
+          endDt = new Date(document.getElementById("endTimeEdit").value);
+          if (!startDt || isNaN(startDt.getTime()) || !endDt || isNaN(endDt.getTime())) {
+              console.error("Cannot proceed without a valid time range."); return;
+          }
+      }
+      let timeRange = [startDt, endDt];
+
+      // --- Get Simulation start time ---
+      let simStart = row["Sim Start"];
+
+      // --- Parse the schedule JSON ---
+      let values = Object.values(row);
+      let jsonStr = values.length > 0 ? values[values.length - 1] : null;
+      let scheduleData = {};
+      if (jsonStr) {
+          try { scheduleData = JSON.parse(jsonStr); }
+          catch (e) { console.error("Error parsing JSON schedule:", e, jsonStr); scheduleData = { "Resources": [], "Orders": [] }; }
+      } else { console.warn("No JSON schedule data found for row:", currentRowIndex); scheduleData = { "Resources": [], "Orders": [] }; }
+      let resources = scheduleData["Resources"] || [];
+      let ordersList = scheduleData["Orders"] || [];
+
+      // --- Cache data before plotting Gantt ---
+      lastGanttResources = resources;
+      lastGanttTimeRange = timeRange;
+      lastGanttSimStart = simStart;
+
+      // --- Draw/Redraw the Gantt Chart ---
+      // Uses the persistent `selectedOrderNames` Set for highlighting
+      plotGantt(resources, timeRange, simStart);
+
+      // --- Update the Fitness Plot ---
+      plotFitness(csvData.slice(0, currentRowIndex + 1));
+
+      // --- Update the Orders Information Table ---
+      // Updates `allOrders`, rebuilds table, adds click handlers, and re-applies selection style
+      updateOrdersList(ordersList);
+    }
+
+
+    // ---------------------------
+    // Function: Renders the Gantt chart using D3.js.
+    // **MODIFIED** to handle multiple selections and assign unique colors.
+    // ---------------------------
+    function plotGantt(resources, timeRange, simStart) {
+      d3.select("#chart").select("svg").remove(); // Clear previous SVG
+
+      const chartDiv = document.getElementById("chart");
+      const containerWidth = Math.max(chartDiv.clientWidth, 100);
+      const containerHeight = Math.max(chartDiv.clientHeight, 100);
+      const margin = { top: 40, right: 20, bottom: 40, left: 100 };
+      const innerW = Math.max(containerWidth - margin.left - margin.right, 50);
+      const innerH = Math.max(containerHeight - margin.top - margin.bottom, 50);
+
+      const svg = d3.select("#chart").append("svg")
+        .attr("width", containerWidth).attr("height", containerHeight)
+        .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+      svg.append("text").attr("x", innerW / 2).attr("y", -margin.top / 2)
+         .attr("text-anchor", "middle").style("font-size", "16px")
+         .style("text-decoration", "underline").text("Gantt Chart");
+
+      // Scales
+      const x = d3.scaleTime().domain(timeRange).range([0, innerW]);
+      const resourceNames = resources.map(r => r["Name"] || "Unknown");
+      const y = d3.scaleBand().domain(resourceNames).range([0, innerH]).padding(0.1);
+
+      // Axes
+      svg.append("g").attr("transform", `translate(0,${innerH})`).call(d3.axisBottom(x).ticks(6));
+      svg.append("g").call(d3.axisLeft(y));
+
+      // Base color function (unchanged)
+      function getColor(opName, opOrder) {
+        let c = "steelblue"; let nameLower = (opName || "").toLowerCase(); let orderLower = (opOrder || "").toLowerCase();
+        if (nameLower.includes("process")) { c = "lightblue"; if (orderLower.includes("rush")) c = "red"; }
+        else if (nameLower.includes("changeover")) { c = "gray"; if (orderLower.includes("rush")) c = "orange"; }
+        else if (nameLower.includes("wait") || nameLower.includes("idle")) { c = "white"; }
+        return c;
+      }
+
+      // Convert Set to Array once for efficient index lookup during color assignment
+      const selectionArray = Array.from(selectedOrderNames);
+
+      // Plot Bars
+      resources.forEach(resource => {
+        const ops = resource["Operations"] || [];
+        const resourceName = resource["Name"] || "Unknown";
+
+        ops.forEach(op => {
+          let startStr = op["Start"], endStr = op["End"];
+          if (!startStr || !endStr) return;
+          let startTime = new Date(startStr), endTime = new Date(endStr);
+          if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) return;
+          if (endTime <= timeRange[0] || startTime >= timeRange[1]) return;
+
+          let clippedStartTime = startTime < timeRange[0] ? timeRange[0] : startTime;
+          let clippedEndTime = endTime > timeRange[1] ? timeRange[1] : endTime;
+          if (clippedStartTime >= clippedEndTime) return;
+
+          const barX = x(clippedStartTime);
+          const barY = y(resourceName);
+          const barWidth = Math.max(1, x(clippedEndTime) - barX); // Min width 1px
+          const barHeight = y.bandwidth();
+          if (isNaN(barX) || isNaN(barY) || isNaN(barWidth) || barWidth <= 0 || isNaN(barHeight)) return;
+
+          const opName  = op["Name"]  || "";
+          const opOrder = op["Order"] || "";
+          const baseFillColor = getColor(opName, opOrder);
+
+          // **NEW**: Determine highlighting based on multiple selections
+          const isSelected = selectedOrderNames.has(opOrder);
+          let barStroke = 'black';
+          let barStrokeWidth = 0.5;
+          let barOpacity = 1.0;
+
+          if (selectedOrderNames.size > 0) { // Apply highlighting/dimming only if any order is selected
+              if (isSelected) {
+                  // Find index of this order in the selection array for consistent color
+                  const colorIndex = selectionArray.indexOf(opOrder);
+                  if (colorIndex !== -1) { // Should always be found if isSelected is true
+                     barStroke = highlightColors[colorIndex % highlightColors.length]; // Assign color cyclically
+                  } else {
+                     barStroke = 'red'; // Fallback color if something goes wrong
+                  }
+                  barStrokeWidth = 2.5; // Thicker border for selected
+                  barOpacity = 1.0;     // Full opacity for selected
+              } else {
+                  // Dim operations not part of the current selection
+                  barOpacity = 0.5; // Dimming factor
+                  barStroke = 'grey'; // Use grey border for dimmed items maybe? Or keep black? Let's try grey.
+                  barStrokeWidth = 0.5;
+              }
+          }
+          // If selectedOrderNames.size is 0, defaults (black, 0.5, 1.0) remain
+
+          // Append rect with calculated styles
+          svg.append("rect")
+             .attr("x", barX).attr("y", barY)
+             .attr("width", barWidth).attr("height", barHeight)
+             .attr("fill", baseFillColor) // Use the base color logic for fill
+             .attr("stroke", barStroke)
+             .attr("stroke-width", barStrokeWidth)
+             .attr("opacity", barOpacity)
+             .on("mouseover", (event) => { /* Tooltip logic unchanged */
+                const tooltip = d3.select("#tooltip"); let text = "";
+                Object.entries(op).forEach(([k, v]) => { text += `<b>${k}:</b> ${v}<br/>`; });
+                tooltip.html(text).style("left", (event.pageX + 10) + "px")
+                   .style("top", (event.pageY + 10) + "px").style("display", "block");
+             })
+             .on("mouseout", () => { d3.select("#tooltip").style("display", "none"); });
+        });
+      });
+
+      // Sim Start Line (unchanged)
+      if (simStart) {
+        let simStartDate = parseDate(simStart);
+        if (simStartDate && !isNaN(simStartDate.getTime())) {
+          let lineX = x(simStartDate);
+          if (lineX >= 0 && lineX <= innerW) {
+            svg.append("line").attr("x1", lineX).attr("x2", lineX).attr("y1", 0).attr("y2", innerH)
+               .attr("stroke", "red").attr("stroke-width", 1.5).attr("stroke-dasharray", "5,5");
+          }
+        } else { console.warn("Could not parse Sim Start date:", simStart); }
+      }
+    }
+
+
+    // ---------------------------
+    // Function: Renders the Fitness vs. Generation line plot. (No changes)
+    // ---------------------------
+    function plotFitness(dataSlice) {
+      d3.select("#fitnessPlot").select("svg").remove();
+      const plotDiv = document.getElementById("fitnessPlot");
+      const containerWidth = Math.max(plotDiv.clientWidth, 100), containerHeight = Math.max(plotDiv.clientHeight, 100);
+      const margin = { top: 30, right: 20, bottom: 40, left: 50 };
+      const innerW = Math.max(containerWidth - margin.left - margin.right, 50), innerH = Math.max(containerHeight - margin.top - margin.bottom, 50);
+      const svg = d3.select("#fitnessPlot").append("svg")
+        .attr("width", containerWidth).attr("height", containerHeight)
+        .append("g").attr("transform", `translate(${margin.left}, ${margin.top})`);
+      svg.append("text").attr("x", innerW / 2).attr("y", -10).attr("text-anchor", "middle").style("font-size", "14px").text("Fitness over Generations");
+      let points = dataSlice.map(row => { const gen = parseFloat(row["Generation"]), fit = parseFloat(row["Fitness"]); return (isNaN(gen) || isNaN(fit)) ? null : { generation: gen, fitness: fit }; }).filter(p => p !== null);
+      points.sort((a, b) => a.generation - b.generation);
+      const x = d3.scaleLinear().domain([0, maxGeneration > 0 ? maxGeneration : 1]).range([0, innerW]).nice();
+      const y = d3.scaleLinear().domain([-3, 10]).range([innerH, 0]); // Fixed Y
+      svg.append("g").attr("transform", `translate(0, ${innerH})`).call(d3.axisBottom(x).ticks(5));
+      svg.append("text").attr("text-anchor", "middle").attr("x", innerW / 2).attr("y", innerH + margin.bottom - 5).text("Generation");
+      svg.append("g").call(d3.axisLeft(y));
+      svg.append("text").attr("text-anchor", "middle").attr("transform", "rotate(-90)").attr("y", -margin.left + 15).attr("x", -innerH / 2).text("Fitness");
+      const line = d3.line().x(d => x(d.generation)).y(d => y(d.fitness)).curve(d3.curveLinear);
+      svg.append("path").datum(points).attr("fill", "none").attr("stroke", "steelblue").attr("stroke-width", 2).attr("d", line);
+    }
+
+
+    // ---------------------------
+    // Function: Updates `allOrders` dictionary and rebuilds the Orders table.
+    // **MODIFIED** click handler to use `selectedOrderNames` Set.
+    // ---------------------------
+    function updateOrdersList(ordersArray) {
+        const ordersProcessedThisIteration = new Set();
+
+        // Update allOrders dictionary (logic mostly unchanged)
+        ordersArray.forEach(orderObj => {
+            const oName = orderObj.Name; if (!oName) return;
+            ordersProcessedThisIteration.add(oName);
+            if (!allOrders[oName]) allOrders[oName] = { dueDate: null, earliestStart: null, latestEnd: null, machines: new Set() };
+            if (orderObj.hasOwnProperty('DueDate') && orderObj.DueDate) allOrders[oName].dueDate = orderObj.DueDate;
+            const ops = orderObj.Operations || []; let currentMachines = new Set();
+            ops.forEach(op => { if (op.Unit) currentMachines.add(op.Unit); });
+            allOrders[oName].machines = currentMachines;
+            let currentEarliest = null, currentLatest = null;
+            if (ops.length >= 2) { const s = ops[1].Start, e = ops[ops.length - 1].End; if(s){const d=new Date(s);if(!isNaN(d))currentEarliest=d;} if(e){const d=new Date(e);if(!isNaN(d))currentLatest=d;} }
+            else if (ops.length === 1) { const s = ops[0].Start, e = ops[0].End; if(s){const d=new Date(s);if(!isNaN(d))currentEarliest=d;} if(e){const d=new Date(e);if(!isNaN(d))currentLatest=d;} }
+            allOrders[oName].earliestStart = currentEarliest; allOrders[oName].latestEnd = currentLatest;
+        });
+
+        // Rebuild HTML Table
+        const tbody = document.getElementById("ordersTableBody");
+        tbody.innerHTML = "";
+        let allOrdersArray = Object.keys(allOrders).sort().map(oName => ({ name: oName, ...allOrders[oName] }));
+
+        allOrdersArray.forEach(orderRec => {
+            let tr = document.createElement("tr");
+            const orderName = orderRec.name;
+
+            const appendCell = (text) => { let td = document.createElement("td"); td.textContent = text ?? ""; tr.appendChild(td); };
+            appendCell(orderName);
+            appendCell(orderRec.earliestStart instanceof Date && !isNaN(orderRec.earliestStart) ? orderRec.earliestStart.toISOString() : "");
+            appendCell(orderRec.latestEnd instanceof Date && !isNaN(orderRec.latestEnd) ? orderRec.latestEnd.toISOString() : "");
+            appendCell(orderRec.dueDate);
+            appendCell([...(orderRec.machines || [])].sort().join(", "));
+            let diffVal = "";
+            if (orderRec.latestEnd instanceof Date && !isNaN(orderRec.latestEnd) && orderRec.dueDate) {
+                let dDate = parseDate(orderRec.dueDate);
+                if (dDate && !isNaN(dDate)) diffVal = ((orderRec.latestEnd.getTime() - dDate.getTime()) / 3600000).toFixed(2);
+                else diffVal = "Invalid Due";
+            } appendCell(diffVal);
+
+            // **MODIFIED**: Click listener uses the Set
+            tr.addEventListener('click', () => {
+                // Toggle selection in the Set
+                if (selectedOrderNames.has(orderName)) {
+                    selectedOrderNames.delete(orderName);
+                    tr.classList.remove('selected-order-row'); // Update table style
+                    tr.style.backgroundColor = ''; tr.style.fontWeight = 'normal';
+                } else {
+                    selectedOrderNames.add(orderName);
+                    tr.classList.add('selected-order-row'); // Update table style
+                    tr.style.backgroundColor = '#e0e0ff'; tr.style.fontWeight = 'bold';
+                }
+                // Redraw Gantt only
+                redrawGanttOnly();
+            });
+
+            // Re-apply table row style based on Set membership
+            if (selectedOrderNames.has(orderName)) {
+                tr.classList.add('selected-order-row');
+                tr.style.backgroundColor = '#e0e0ff'; tr.style.fontWeight = 'bold';
+            } else {
+                 tr.classList.remove('selected-order-row');
+                 tr.style.backgroundColor = ''; tr.style.fontWeight = 'normal';
+            }
+
+            tbody.appendChild(tr);
+        });
+    }
+
+
+    // ---------------------------
+    // Event Listener: Handles CSV file selection.
+    // **MODIFIED** to clear the `selectedOrderNames` Set.
+    // ---------------------------
+    document.getElementById("csvFileInput").addEventListener("change", function (event) {
+      const file = event.target.files[0]; if (!file) return;
+
+      // Reset application state
+      csvData = []; currentRowIndex = 0; totalRowsParsed = 0; maxGeneration = 0; allOrders = {};
+      selectedOrderNames.clear(); // **MODIFIED**: Clear the Set
+      lastGanttResources = []; lastGanttTimeRange = []; lastGanttSimStart = null;
+      d3.select("#chart").select("svg").remove(); d3.select("#fitnessPlot").select("svg").remove();
+      document.getElementById("ordersTableBody").innerHTML = ""; document.getElementById("metadataLabel").innerText = "Metadata: ";
+      document.getElementById("rowSlider").value = 0; document.getElementById("rowSlider").max = 0;
+      document.getElementById("startTimeEdit").value = ""; document.getElementById("endTimeEdit").value = "";
+      if (playInterval) { clearInterval(playInterval); playInterval = null; document.getElementById("playButton").innerText = "Play"; }
+
+      // Setup Progress Bar
+      const progressContainer = document.getElementById("progressContainer"), progressBar = document.getElementById("progressBar"), progressText = document.getElementById("progressText");
+      progressContainer.style.display = "inline-block"; progressBar.style.width = "0%"; progressText.innerText = "Parsing 0%";
+
+      // PapaParse Streaming
+      Papa.parse(file, {
+        header: true, delimiter: ";", skipEmptyLines: true, chunkSize: 1024 * 1024,
+        chunk: function(results, parser) {
+          results.data.forEach(row => { csvData.push(row); let gen = parseFloat(row["Generation"]); if (!isNaN(gen) && gen > maxGeneration) maxGeneration = gen; });
+          if (parser.streamer?._handle?.bytesRead !== undefined) { let pct = file.size > 0 ? Math.min(100, Math.floor((parser.streamer._handle.bytesRead / file.size) * 100)) : 0; progressBar.style.width = pct + "%"; progressText.innerText = `Parsing ${pct}%`; }
+          else { totalRowsParsed += results.data.length; progressText.innerText = `Parsed rows: ${totalRowsParsed}`; }
+        },
+        complete: function() {
+          progressContainer.style.display = "none"; progressText.innerText = "";
+          console.log(`CSV Parsing Complete. ${csvData.length} rows loaded. Max Generation: ${maxGeneration}`);
+          if (csvData.length > 0) { document.getElementById("rowSlider").max = csvData.length - 1; setFixedTimeRange(csvData[0]); updateView(); }
+          else { alert("CSV file empty or unparseable."); }
+        },
+        error: function(error, file) {
+            console.error("PapaParse Error:", error); progressContainer.style.display = "none"; progressText.innerText = "Error parsing file!";
+            alert(`Error parsing CSV file: ${error.message}\nPlease check format/delimiter.`);
+        }
+      });
+    });
+
+    // Event Listeners (unchanged)
+    document.getElementById("rowSlider").addEventListener("input", updateView);
+    document.getElementById("startTimeEdit").addEventListener("change", updateView);
+    document.getElementById("endTimeEdit").addEventListener("change", updateView);
+    document.getElementById("playButton").addEventListener("click", function () { /* Play/Pause logic unchanged */
+      const btn = this; if (btn.innerText === "Play") { if (csvData.length === 0) { alert("Please load a CSV file first."); return; } btn.innerText = "Pause"; const delay = parseInt(document.getElementById("delaySpinBox").value, 10) || 1000; playInterval = setInterval(() => { const slider = document.getElementById("rowSlider"); let max = parseInt(slider.max, 10), cur = parseInt(slider.value, 10), next = cur + 1; if (next > max) next = 0; slider.value = next; updateView(); }, delay); } else { btn.innerText = "Play"; clearInterval(playInterval); playInterval = null; } });
+    document.getElementById("exportButton").addEventListener("click", function () { /* Export logic unchanged */
+      const svgEl = document.querySelector("#chart svg"); if (!svgEl) { console.warn("No Gantt chart to export."); return; } try { const ser = new XMLSerializer(); let src = ser.serializeToString(svgEl); if (!src.match(/^<svg[^>]+xmlns="http:\/\/www.w3.org\/2000\/svg"/)) src = src.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"'); if (!src.match(/^<svg[^>]+"http:\/\/www.w3.org\/1999\/xlink"/)) src = src.replace(/^<svg/, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"'); src = '<?xml version="1.0" standalone="no"?>\r\n' + src; const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(src); const link = document.createElement("a"); link.href = url; link.download = "gantt_chart.svg"; document.body.appendChild(link); link.click(); document.body.removeChild(link); } catch (e) { console.error("Error exporting SVG:", e); alert("Error exporting SVG."); } });
+
+    </script>
+</body>
+</html>

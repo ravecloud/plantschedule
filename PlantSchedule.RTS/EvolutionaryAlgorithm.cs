@@ -1241,7 +1241,7 @@ public class EvolutionaryAlgorithm
                 }
             }
             // remove all orders after the first order that is not in the range anymore.
-            operationsToRemove = o.Operations.GetRange(rangeIndex, o.Operations.Count - rangeIndex);
+            operationsToRemove.AddRange(o.Operations.GetRange(rangeIndex, o.Operations.Count - rangeIndex));
             o.Operations.RemoveRange(rangeIndex, o.Operations.Count - rangeIndex);
         }
         
