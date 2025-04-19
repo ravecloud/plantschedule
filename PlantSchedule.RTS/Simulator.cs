@@ -990,6 +990,13 @@ public class CSharpSimulator : ISimulator
                 Unit = bestResource.Name
             };
 
+            // Shift the changeover to the last possible start time
+            if (bestResource.Operations.Last().Name.Contains("Changeover"))
+            {
+                bestResource.Operations.Last().End = nextOperation.Start;
+                bestResource.Operations.Last().Start = bestResource.Operations.Last().End.AddHours(-bestResource.Operations.Last().Duration);
+            }
+
             bestResource.Operations.Add(nextOperation);
             order.Operations.Add(nextOperation);
         }
