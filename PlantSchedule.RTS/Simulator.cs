@@ -794,6 +794,8 @@ public class CSharpSimulator : ISimulator
     }
     private Resource FindBestResource(List<Resource> resources, Order order)
     {
+        // TODO: Add feature that opeartions can be added in gaps
+        // [ op1, gap1, ch2, op2, gap2, ch2, op2]
         var bestEnd = this.SimulationEnd.AddDays(10); // just a margin of safety
         var bestRes = resources[0];
         var resourceEnd = new DateTime();
@@ -801,6 +803,20 @@ public class CSharpSimulator : ISimulator
 
         foreach (var resource in resources)
         {
+            // TODO, todo, todo...
+            for (int i = 0; i < resource.Operations.Count - 1; i++) { 
+                var op1 = resource.Operations[i];
+                var op2 = resource.Operations[i + 1];
+                if(op1.Order == op2.Order)
+                {
+                    continue;
+                }
+                var gap = op1.End.Subtract(op2.Start).TotalHours;
+                var changeover = GetChangeover(resource, order.Name); // Has to be specific to this operation
+                if(gap > 0.0 && gap > 
+                    )
+
+            }
             foreach(var operation in resource.Operations)
             {
                 continue;
