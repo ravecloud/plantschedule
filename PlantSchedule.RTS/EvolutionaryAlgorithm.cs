@@ -96,6 +96,7 @@ public class EvolutionaryAlgorithm
     // Components
     public List<Individual> Population;
     public List<Individual> Offspring;
+    public Individual Reference;
 
     // Functions
     public Func<List<Individual>, int, string, List<Individual>> ParentSelection;
@@ -849,9 +850,10 @@ public class EvolutionaryAlgorithm
         w.Resources = copyResources;
     }
 
-    private void ConcatGenes(Worker w, Individual p, List<Order> copyOrders, List<Resource> copyResources)
+    private void ConcatOperations(Individual reference)
     {
-        var gene = p.Genes[0];
+        var gene = reference.Genes[0];
+        var w = reference.Worker;
         w.SimulationInstance.SimulationStart = this.SimulationStart;
         w.SimulationInstance.SimulationEnd = this.SimulationEnd;
         foreach (var individual in this.Population)
@@ -882,8 +884,8 @@ public class EvolutionaryAlgorithm
             //individual.Mutate();
             //individual.Genes[0].Mutation();
             // change the other 
-            individual.Worker.Orders = this.Simulator.CopyOrders(w.Orders);
-            individual.Worker.Resources = this.Simulator.CopyResources(w.Resources);
+            individual.Worker.Orders = new(); // this.Simulator.CopyOrders(w.Orders);
+            individual.Worker.Resources = new(); // this.Simulator.CopyResources(w.Resources);
             individual.Worker.SimulationInstance.SimulationStart = this.SimulationStart;
             individual.Worker.SimulationInstance.SimulationEnd = this.SimulationEnd;
             individual.Worker.SimulationInstance.Objectives = new Dictionary<string, double>();
@@ -1075,6 +1077,7 @@ public class EvolutionaryAlgorithm
 
     public void Update(UpdateEvent updateEvent)
     {
+        // Do update according to flags
         if (updateEvent.UpdateType.HasFlag(UpdateType.Time))
         {
             var frozenTime = updateEvent.UpdateTime;
@@ -1160,70 +1163,101 @@ public class EvolutionaryAlgorithm
         // Modify only if we go one step further in time!!!
         if ((updateEvent.UpdateType & UpdateType.Time) == UpdateType.Time)
         {
-            this.ModifyNew(updateEvent.UpdateType);
+            this.ModifyOrderStates();
         }
+
         // Remove the element from the dictionary!!!
         this.UpdateEvents.Remove(this.Generation);
     }
 
-    public void ModifyNew(UpdateType updateType)
+    /// <summary>
+    /// Goes through all orders and their operations and checks if they start and end before the actual 
+    /// simulation date. If not, the operations are in the future and can be changed by the scheduler.
+    /// </summary>
+    public void ModifyOrderStates()
     {
         // First sort the population according to the fitness
         Population = Population.OrderBy(x => x.Fitness[Objective]).ToList();
-        /// Best individual
-        var p = Population[0];
-        var w = Population[0].Worker;
-        // copy original orders and resources to use as initialization
-        var copyOrders = Simulator.CopyOrders(p.Worker.Orders);
-        var copyResources = Simulator.CopyResources(p.Worker.Resources);
+        var bestIndividual = Population[0];
 
-        RemoveFinishedOrders(w, p);
-        RemoveFinishedOperationsFromOrders(w.Orders, w.Resources);
-        RemoveFinishedOperations(w.Resources);
+        // copy original orders and resources to use as initialization
+        this.Reference = new Individual();
+        this.Reference.Worker.Orders = Simulator.CopyOrders(bestIndividual.Worker.Orders);
+        this.Reference.Worker.Resources = Simulator.CopyResources(bestIndividual.Worker.Resources);
+        this.Reference.Genes = new List<IGene>() { (Gene<string>)bestIndividual.Genes[0].Copy() };
+
+        RemoveFinishedOrders(this.Reference);
+        //RemoveFinishedOperationsFromOrders(w.Orders, w.Resources);
+        //RemoveFinishedOperations(w.Resources);
         // RepairSchedules!!
-        ConcatGenes(w, p, copyOrders, copyResources);
+        // ConcatGenes(w, p, copyOrders, copyResources);
         // w.Resources = copyResources;
     }
-    private void RemoveFinishedOrders(Worker w, Individual p)
+    private void RemoveFinishedOrders(Individual reference)
     {
         // remove order if the last operation ends before simualtion statr
+        var w = reference.Worker;
+        var operationsToRemove = new List<Operation>();
         for (int i = 0; i < w.Orders.Count; i++)
         {
             var lastOperation = w.Orders[i].Operations.Last();
             if (lastOperation.End < SimulationStart)
             {
                 // remove order from gene
-                var gene = ((Gene<String>)p.Genes[0]).Values;
+                var gene = ((Gene<String>)reference.Genes[0]).Values;
                 var j = gene.FindIndex(x => x == lastOperation.Order);
                 gene.RemoveAt(j);
                 // remove prder from worker
                 w.Orders.RemoveAt(i);
                 i--;
+                break;
             }
-            /*
-            else
-            {
-                var order = w.Orders[i];
-                order.Operations = new List<Operation>();
-                order.Operations.Add(new Operation()
-                {
-                    Name = "Wait_S0", // Wait, Process, End, Transfer
-                    Unit = "",
-                    Order = order.Name,
-                    Duration = 0.0,
-                    Start = this.Config.SimulationStart,
-                    End = this.Config.SimulationStart
-                });
-            }
-            */
-        }
 
+            var rangeIndex = w.Orders[i].Operations.Count;
+            for (int j = 0; j < w.Orders[i].Operations.Count - 1; j++)
+            {
+                var op = w.Orders[i].Operations[j];
+                if(op.Start >= this.SimulationStart)
+                {
+                    rangeIndex = j;
+                    break;
+                }
+            }
+            // remove all orders after the first order that is not in the range anymore.
+            operationsToRemove.AddRange(w.Orders[i].Operations.GetRange(rangeIndex, w.Orders[i].Operations.Count - rangeIndex));
+            w.Orders[i].Operations.RemoveRange(rangeIndex, w.Orders[i].Operations.Count - rangeIndex);
+        }
+        // Still a bit buggy. Maybe allow fill operations in between 
         if (w.Orders.Count == 0)
         {
             this.WriteBestResult();
             this.Log(LogOption.End, message: "All orders finished!");
             Environment.Exit(0);
         }
+
+        // remove all operations from the resources list
+        var resources = w.Resources;
+        foreach(var r in resources)
+        {
+            for(int o = r.Operations.Count - 1; o >= 0;  o--)
+            {
+                var op = r.Operations[o];
+                var idx = operationsToRemove.FindIndex(operation => operation.Equals(op));
+                if(idx != -1)
+                {
+                    r.Operations.Remove(operationsToRemove[idx]);
+                    operationsToRemove.RemoveAt(idx);
+                    continue;
+                }
+
+                if (op.Start >= this.SimulationStart && op.Name.Contains("Maintenance"))
+                {
+                    r.Maintenance.Add(new(op.Start, op.End));
+                    r.Operations.RemoveAt(o);
+                }
+            }
+        }
+
     }
     private void RemoveFinishedOperationsFromOrders(List<Order> order, List<Resource> resources)
     {
@@ -1756,80 +1790,42 @@ public class EvolutionaryAlgorithm
     }
     public void Recombine()
     {
-        // TODO: Check if the fitness function name is set
         Offspring = new List<Individual>();
-        // take orders from the best parent?
-        // List<PlantSchedule.DTO.Order> openOrders = ((Individual)this.Population[0]).Worker.Orders.Where(x => x.Started == false).ToList();
-        // List<PlantSchedule.DTO.Order> fixedOrders = ((Individual)this.Population[0]).Worker.Orders.Where(x => x.Started == true).ToList();
-
-        // Iterate over the selected parents and recombine them
-        // Generates two offsprings per parent pair
         foreach (var parents in selectedParents)
         {
+            // Parent 1
             var parentIdx1 = this.Population.FindIndex(p => p.Id == parents.Item1);
             if (parentIdx1 == -1) parentIdx1 = new Random().Next(0, selectedParents.Count);
             var parent1 = this.Population[parentIdx1];
-            var geneValues1 = ((Gene<string>)parent1.Genes[0]).Values;
-            /*
-            foreach (var fixedOrder in fixedOrders)
-            {
-                if(geneValues1.Contains(fixedOrder.Name)) geneValues1.Remove(fixedOrder.Name); 
-            }
-            */
 
-
+            // Parent 2
             var parentIdx2 = this.Population.FindIndex(p => p.Id == parents.Item2);
             if (parentIdx2 == -1) parentIdx2 = new Random().Next(0, selectedParents.Count);
             var parent2 = this.Population[parentIdx2];
-            var geneValues2 = ((Gene<string>)parent1.Genes[0]).Values;
-            /*
-            foreach (var fixedOrder in fixedOrders)
-            {
-                if(geneValues2.Contains(fixedOrder.Name)) geneValues1.Remove(fixedOrder.Name); 
-            }
-            */
+
+            // Recombine
             (IGene gene1, IGene gene2) = parent1.Genes[0].Recombine(parent2.Genes[0]);
-            AddOffspring(gene1, this.Population[0]);
-            AddOffspring(gene2, this.Population[0]);
-
-            //AddOffspring(gene1, fixedOrders);
-            //AddOffspring(gene2, fixedOrders);
-            /*
-            Offspring.Add(new Individual(new List<IGene>() { gene1 }));
-            var worker1 = ((Individual)Offspring[^1]).Worker;
-            worker1.InosimInstance.SimulationStart = this.SimulationStart;
-            worker1.InosimInstance.SimulationEnd = this.SimulationEnd;
-            ((Individual)Offspring[^1]).Worker.Orders.AddRange(Simulator.CopyOrders(fixedOrders));
-            if(fixedOrders.Count > 0) ((Individual)Offspring[^1]).Worker.Orders.AddRange(Simulator.CopyOrders(fixedOrders));
-            foreach (var order in ((Individual)Offspring[^1]).Worker.Orders)
-            {
-                RemoveOperationsAfterStart(order.Operations);
-            }
-
-            Offspring.Add(new Individual(new List<IGene>() { gene2 }));
-            ((Individual)Offspring[^1]).Worker.Orders.AddRange(Simulator.CopyOrders(fixedOrders));
-            if(fixedOrders.Count > 0) ((Individual)Offspring[^1]).Worker.Orders.AddRange(Simulator.CopyOrders(fixedOrders));
-            foreach (var order in ((Individual)Offspring[^1]).Worker.Orders)
-            {
-                RemoveOperationsAfterStart(order.Operations);
-            }
-            */
-
+            AddOffspring(gene1);
+            AddOffspring(gene2);
         }
     }
 
-    private void AddOffspring(IGene gene, Individual ind)
+    private void AddOffspring(IGene gene)
     {
         Offspring.Add(new Individual(new List<IGene>() { gene }));
-        var worker = ((Individual)Offspring[^1]).Worker;
+        var offspring = ((Individual)Offspring[^1]);
+        var worker = offspring.Worker;
         worker.SimulationInstance.SimulationStart = this.SimulationStart;
         worker.SimulationInstance.SimulationEnd = this.SimulationEnd;
         worker.Orders = new List<Order>();
-        worker.Resources = this.Simulator.CopyResources(ind.Worker.Resources);
-        foreach (var res in worker.Resources)
-        {
-            RemoveOperationsAfterStart(res.Operations);
-        }
+        worker.Resources = new List<Resource>();    
+        //((CSharpSimulator)this.Simulator).InitOrders(offspring, (Gene<string>)gene);
+
+        //worker.Resources = this.Simulator.CopyResources(ind.Worker.Resources);
+        //this.Simulator.CopyOrders(ind.Worker.Orders).OrderBy(gene.Name);
+        //RemoveFinishedOrders(worker, offspring);
+        //RemoveFinishedOperationsFromOrders(worker.Orders, worker.Resources);
+        //RemoveFinishedOperations(worker.Resources);
     }
 
     private void AddOffspring(IGene gene, List<Order> fixedOrders)
@@ -1904,18 +1900,18 @@ public class EvolutionaryAlgorithm
         switch (option)
         {
             case EvalOpt.Init:
-                Simulator.Simulate(this.Offspring, LogWriter, SimulationStart);
-                Simulator.Simulate(this.Population, LogWriter, SimulationStart);
+                Simulator.Simulate(this.Offspring, this.Reference);
+                Simulator.Simulate(this.Population, this.Reference, skipId: this.Population[0].Id);
                 Population.ForEach(x => { if (!x.Fitness.ContainsKey(Objective)) x.Fitness[Objective] = Double.MaxValue; });
                 Population = Population.OrderBy(x => x.Fitness[Objective]).ToList();
                 break;
             case EvalOpt.Population:
-                Simulator.Simulate(this.Population, LogWriter, SimulationStart);
+                Simulator.Simulate(this.Population, this.Reference, skipId: this.Population[0].Id);
                 Population.ForEach(x => { if (!x.Fitness.ContainsKey(Objective)) x.Fitness[Objective] = Double.MaxValue; });
                 Population = Population.OrderBy(x => x.Fitness[Objective]).ToList();
                 break;
             case EvalOpt.Offspring:
-                Simulator.Simulate(this.Offspring, LogWriter, SimulationStart);
+                Simulator.Simulate(this.Offspring, this.Reference);
                 break;
             default:
                 break;

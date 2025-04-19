@@ -6,6 +6,7 @@ using System.Text.Json;
 using PlantSchedule.DTO;
 using Timer = System.Timers.Timer;
 using System.Data;
+using System.Collections.Generic;
 
 
 namespace PlantSchedule.RTS;
@@ -15,7 +16,7 @@ public interface ISimulator
     public DateTime SimulationStart { get; set; }
     public DateTime SimulationEnd { get; set; }
     public void Simulate(List<Individual> individuals, StreamWriter logWriter);
-    public void Simulate(List<Individual> individuals, StreamWriter logWriter, DateTime simulationStart);
+    public void Simulate(List<Individual> individuals, Individual reference, int skipId = -1);
     public List<String> Orders { get; set; }
     public List<PlantSchedule.DTO.Order> CopyOrders(List<PlantSchedule.DTO.Order> otherOrders);
     public void Simulate(string json);
@@ -245,15 +246,8 @@ public class CSharpSimulator : ISimulator
         return new List<int>(uniqueNumbers);
     }
 
-    private void IterateSimulation(Individual ind)
+    private void StartSimulationSteps(Individual ind)
     {
-        Gene<string>? orderGene = ind.Genes.Find(x => x.Name == GeneName.Order) as Gene<string>;
-        if (orderGene == null) throw new Exception($"Could not find a gene with gene type {GeneName.Order.ToString()}");
-
-        this.InitWorker(ind, orderGene);
-        // Why order by descending?
-        ind.Worker.Orders =  ind.Worker.Orders.OrderByDescending(x => x.Name.Length).ToList();
-
         var orders = ind.Worker.Orders;
         var resources = ind.Worker.Resources;
         bool simulationFinished = false;
@@ -262,9 +256,6 @@ public class CSharpSimulator : ISimulator
             var allEnded = false;
             foreach (var order in orders)
             {
-                // here we should set the end of the idle times of the operations to the min release date of the order
-
-
                 var lastOperation = order.Operations.Last();
                 var nameSplit = lastOperation.Name.Split("_");
                 var state = nameSplit.First();
@@ -272,67 +263,13 @@ public class CSharpSimulator : ISimulator
                 var nextStage = FindNextStage(stage, order.Name);
                 var nextNextStage = FindNextStage(nextStage, order.Name);
                 if (!StageMachineMap.ContainsKey(nextNextStage)) nextNextStage = nextStage;
-
-                if (false)
-                {
-
-                    var allocatableResources = FindAllocatableResource(ind.Worker.Resources, order.Name, nextStage);
-                    if (allocatableResources.Count > 0)
-                    {
-                        var earliestEndingOrder = ind.Worker.Orders
-                            .Where(order => order.Operations != null && order.Operations.FindIndex(x => x.Name == $"Process_{nextStage}") == -1 && order.Operations.FindIndex(x => x.Name == $"Process_{nextNextStage}") == -1)
-                            //.Select(order => order.Operations.Last().End)
-                            //.Min();
-                            .OrderBy(order => order.Operations.Last().End)
-                            .FirstOrDefault();
-
-                        if (earliestEndingOrder != order)
-                        {
-                            var minOrderReleaseDate = earliestEndingOrder.Operations.Last().End;
-                            var stepOrder = true;
-
-                            // Can be only made for resources that are on this stage. But for the moment we leave it
-                            foreach (var res in allocatableResources)
-                            {
-                                var lastResOp = res.Operations.Last();
-                                if (lastResOp.End < minOrderReleaseDate)
-                                {
-                                    if (lastResOp.Name != "Idle")
-                                    {
-                                        res.Operations.Add(new Operation()
-                                        {
-                                            Name = "Idle",
-                                            Start = lastResOp.End,
-                                            End = minOrderReleaseDate,
-                                            Order = lastResOp.Order,
-                                            Duration = 0.0,
-                                            Unit = lastResOp.Name
-                                        });
-                                    }
-                                    else
-                                    {
-                                        lastResOp.End = minOrderReleaseDate;
-                                    }
-                                }
-                            }
-                            stepOrder = allocatableResources.Any(x => x.Operations.Last().End >= order.Operations.Last().End);
-                            if (!stepOrder)
-                            {
-                                continue;
-                            }
-                        }
-                    }
-                }
                 // Make the changeover a state of the order. Thereafter put the order in the resource again for which the changeover was done.
                 switch (state)
                 {
                     case "Changeover":
                         StepAfterChangeover(order, resources, nextStage);
                         continue;
-                    // define maintenance as an order?
                     case "End":
-                        // Check if the next stage has orders to allocate or if it is the last stage before the actual end!
-                        //Console.WriteLine();
                         break;
                     default:
                         // Default is Process or Wait
@@ -350,11 +287,11 @@ public class CSharpSimulator : ISimulator
 
     private void InitWorker(Individual ind, Gene<string> orderGene)
     {
-        InitWorkerResources(ind);
+        InitResources(ind);
         InitOrders(ind, orderGene);
     }
     
-    private void InitWorkerResources(Individual ind)
+    private void InitResources(Individual ind)
     {
         if(ind.Worker.Resources.Count == 0)
         {
@@ -377,14 +314,14 @@ public class CSharpSimulator : ISimulator
         } 
     }
 
-    private void InitOrders(Individual ind, Gene<string> orderGene)
+    public void InitOrders(Individual ind, Gene<string> orderGene)
     {
-        // if (ind.Worker.Orders == null) 
         ind.Worker.Orders = new List<Order>();
-        //ind.Worker.Orders = new List<Order>();
         foreach (var order in orderGene.Values)
         {
-            if(ind.Worker.Orders.Exists(x=>x.Name == order)) {
+            // Only add new order if it does not exist yet
+            if (ind.Worker.Orders.Exists(x => x.Name == order))
+            {
                 continue;
             }
 
@@ -424,6 +361,8 @@ public class CSharpSimulator : ISimulator
                 End = start
             });
         }
+        /*
+        AddOperationsFromResource(ind);
 
         // add operations to orders
         var orders = ind.Worker.Orders;
@@ -445,22 +384,83 @@ public class CSharpSimulator : ISimulator
             }
 
         }
+        */
+    }
+    public void AddOperationsFromResource(Individual ind)
+    {
+        // add operations to orders
+        var orders = ind.Worker.Orders;
+        foreach (var resource in ind.Worker.Resources)
+        {
+            if(resource.Operations.Count > 1)
+            {
+                foreach (var operation in resource.Operations)
+                {
+                    if (operation.Name.Contains("Process") || operation.Name.Contains("Changeover"))
+                    {
+                        var orderIdx = orders.FindIndex(x => x.Name == operation.Order);
+                        if (orderIdx > -1)
+                        {
+                            orders[orderIdx].Operations.Add(CopyOperation(operation));
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+    public void AddOperationsFromReference(Individual ind, Individual reference)
+    {
+        // add operations to orders
+        foreach (var order in reference.Worker.Orders)
+        {
+            var orderIndex = ind.Worker.Orders.FindIndex(o => o.Name == order.Name);
+            if (orderIndex > -1) {
+                ind.Worker.Orders[orderIndex].Operations = CopyOperations(order.Operations);
+            }
+        }
+
+        foreach(var resource in reference.Worker.Resources)
+        {
+            var resourceIndex = ind.Worker.Resources.FindIndex(r => r.Name == resource.Name);
+            if (resourceIndex > -1) {
+                ind.Worker.Resources[resourceIndex].Operations = CopyOperations(resource.Operations);
+            }
+        }
     }
 
+    private void PrepareSimulation(Individual ind, Individual reference, int skipId = -1)
+    {
+        Gene<string>? orderGene = ind.Genes.Find(x => x.Name == GeneName.Order) as Gene<string>;
+        if (orderGene == null) throw new Exception($"Could not find a gene with gene type {GeneName.Order.ToString()}");
+        InitResources(ind);
+        InitOrders(ind, orderGene);
+        if (reference != null && skipId != ind.Id) { 
+            AddOperationsFromReference(ind, reference);
+        }
+    }
     #endregion
     #region PUBLIC METHODS
-    public void Simulate(List<Individual> individuals, StreamWriter logWriter, DateTime simulationStart)
+    public void Simulate(List<Individual> individuals, Individual reference, int skipId = -1)
     {
         var sw = new Stopwatch();
         sw.Start();
 
         if (Config.ParallelExecution)
         {
-            Parallel.ForEach(individuals, new ParallelOptions() { MaxDegreeOfParallelism = Config.NumberOfWorkers}, ind => IterateSimulation(ind));
+            Parallel.ForEach(individuals, new ParallelOptions() { MaxDegreeOfParallelism = Config.NumberOfWorkers }, ind =>
+            {
+                PrepareSimulation(ind, reference, skipId);
+                StartSimulationSteps(ind);
+            });
         }
         else
         {
-            foreach (var ind in individuals) IterateSimulation(ind);
+            foreach (var ind in individuals)
+            {
+                PrepareSimulation(ind, reference, skipId);
+                StartSimulationSteps(ind);
+            }
         }
 
         sw.Stop();
@@ -801,6 +801,11 @@ public class CSharpSimulator : ISimulator
 
         foreach (var resource in resources)
         {
+            foreach(var operation in resource.Operations)
+            {
+                continue;
+            }
+            // Here we can fill spots in the schedule
             if(resource.Operations.Last().Name.Contains("Changeover") && resource.Operations.Last().Order != order.Name)
             {
                 // since the changeover started before the simulation and carrys on
@@ -919,39 +924,6 @@ public class CSharpSimulator : ISimulator
     {
         // Only go in the wait state of the stage if it needs to be processed on this stage. Otherwise skip stage
         var allocatableResources = FindAllocatableResource(resources, order.Name, stage);
-        /*var allocations = new Dictionary<string, List<string>>
-        {
-            { "P18_00", new List<string> { "M02", "M04", "M11", "M12", "M17" } },
-            { "P25_00", new List<string> { "M01", "M03", "M10", "M14", "M17" } },
-            { "P07_00", new List<string> { "M02", "M04", "M11", "M12", "M16" } },
-            { "P02_00", new List<string> { "M01", "M03", "M11", "M12", "M17" } },
-            { "P30_00", new List<string> { "M02", "M04", "M10", "M12", "M17" } },
-            { "P06_00", new List<string> { "M01", "M03", "M09", "M14", "M16" } },
-            { "P23_00", new List<string> { "M02", "M05", "M06", "M11", "M12", "M17" } },
-            { "P11_00", new List<string> { "M01", "M04", "M11", "M13", "M15" } },
-            { "P28_00", new List<string> { "M02", "M03", "M11", "M13", "M16" } },
-            { "P22_00", new List<string> { "M01", "M04", "M11", "M12", "M17" } },
-            { "P15_00", new List<string> { "M02", "M03", "M09", "M14", "M17" } },
-            { "P13_00", new List<string> { "M01", "M05", "M08", "M10", "M13", "M16" } },
-            { "P29_00", new List<string> { "M02", "M04", "M10", "M13", "M15" } },
-            { "P10_00", new List<string> { "M01", "M03", "M11", "M12", "M16" } },
-            { "P19_00", new List<string> { "M02", "M04", "M11", "M14", "M17" } },
-            { "P09_00", new List<string> { "M01", "M03", "M11", "M12", "M16" } },
-            { "P27_00", new List<string> { "M02", "M04", "M08", "M11", "M12", "M17" } },
-            { "P05_00", new List<string> { "M01", "M03", "M10", "M13", "M15" } },
-            { "P17_00", new List<string> { "M02", "M05", "M06", "M09", "M14", "M15" } },
-            { "P04_00", new List<string> { "M01", "M04", "M11", "M12", "M17" } },
-            { "P20_00", new List<string> { "M02", "M05", "M07", "M10", "M13", "M16" } },
-            { "P03_00", new List<string> { "M01", "M03", "M10", "M13", "M16" } },
-            { "P01_00", new List<string> { "M02", "M05", "M06", "M11", "M12", "M17" } },
-            { "P08_00", new List<string> { "M01", "M04", "M07", "M10", "M14", "M16" } },
-            { "P14_00", new List<string> { "M02", "M03", "M09", "M14", "M15" } },
-            { "P12_00", new List<string> { "M01", "M05", "M08", "M10", "M12", "M17" } },
-            { "P21_00", new List<string> { "M02", "M04", "M07", "M10", "M12", "M17" } },
-            { "P26_00", new List<string> { "M01", "M03", "M06", "M11", "M14", "M15" } },
-            { "P16_00", new List<string> { "M02", "M05", "M08", "M11", "M13", "M16" } },
-            { "P24_00", new List<string> { "M01", "M04", "M07", "M11", "M14", "M17" } }
-        };*/
 
         if (allocatableResources.Count > 0)
         {
@@ -1077,7 +1049,7 @@ public class CSharpSimulator : ISimulator
         }
         return nextStage;
     }
-    private List<PlantSchedule.DTO.Operation> CopyOperations(List<PlantSchedule.DTO.Operation> otherOperations)
+    public List<PlantSchedule.DTO.Operation> CopyOperations(List<PlantSchedule.DTO.Operation> otherOperations)
     {
         List<PlantSchedule.DTO.Operation> operations = new List<PlantSchedule.DTO.Operation>();
         for (int i = 0; i < otherOperations.Count(); i++)
