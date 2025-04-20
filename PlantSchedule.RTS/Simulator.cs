@@ -792,55 +792,70 @@ public class CSharpSimulator : ISimulator
         return allocatableResources;
             
     }
-    private Resource FindBestResource(List<Resource> resources, Order order)
+    private (int, Resource) FindBestResource(List<Resource> resources, Order order)
     {
         // TODO: Add feature that opeartions can be added in gaps
         // [ op1, gap1, ch2, op2, gap2, ch2, op2]
         var bestEnd = this.SimulationEnd.AddDays(10); // just a margin of safety
         var bestRes = resources[0];
         var resourceEnd = new DateTime();
-        var orderEnd = new DateTime();
+        var orderEnd = order.Operations.Last().End;
+        var bestOperation = -1;
 
+        // TODO: Account for changeover times that are already there.
+        // TODO: P18_00 is twice in the gantt
         foreach (var resource in resources)
         {
-            // TODO, todo, todo...
-            for (int i = 0; i < resource.Operations.Count - 1; i++) { 
+            var gapIndex = resource.Operations.Count - 1;
+            var orderName = order.Name.Split("_").First();
+            var changeoverTime = GetChangeover(resource, orderName);
+            var processTime = ProcessTimes[(orderName, resource.Name)];
+
+            // Search for all the gaps that are feasible 
+            var gaps = new Dictionary<int,double>();
+            for (int i = 0; i < resource.Operations.Count - 1; i++)
+            {
                 var op1 = resource.Operations[i];
                 var op2 = resource.Operations[i + 1];
-                if(op1.Order == op2.Order)
+                if (op1.Order == op2.Order) // Make sure that it is no chanvover or cleaning
                 {
                     continue;
                 }
-                var gap = op1.End.Subtract(op2.Start).TotalHours;
-                var changeover = GetChangeover(resource, order.Name); // Has to be specific to this operation
-                if(gap > 0.0 && gap > 
-                    )
+                var gap = op2.Start.Subtract(op1.End).TotalHours;
+                if (gap == 0.0) continue;
 
+                var totalProcessTime = changeoverTime + processTime;
+                if (op1.End >= order.Operations.Last().End && // check if last operation of order ends to the right time
+                    op2.Start >= op1.End.AddHours(totalProcessTime)) // check if last operation of order fits into the gap
+                {
+                    gaps.Add(i, gap);
+                }
             }
-            foreach(var operation in resource.Operations)
-            {
-                continue;
-            }
+
             // Here we can fill spots in the schedule
-            if(resource.Operations.Last().Name.Contains("Changeover") && resource.Operations.Last().Order != order.Name)
+            if (resource.Operations.Last().Name.Contains("Changeover") && resource.Operations.Last().Order != order.Name)
             {
                 // since the changeover started before the simulation and carrys on
                 // basically the changeover is preempted
                 resourceEnd = SimulationStart;
 
-            } else
+            }
+            else if (gaps.Count > 0)
             {
+                // we also have to check if the order ends at the same time of the gap
+                var operationKey = gaps.OrderByDescending(kvp => kvp.Value).First().Key;
+                resourceEnd = resource.Operations[operationKey].End;
+                gapIndex = operationKey;
+            }
+            else
+            { 
                 resourceEnd = resource.Operations.Last().End;
             }
-            orderEnd = order.Operations.Last().End;
 
-            var orderName = order.Name.Split("_").First();
-            var changeoverTime = GetChangeover(resource, orderName);
             if (resource.Operations.Last().Name.Contains("Changeover") && resource.Operations.Last().Order == order.Name)
             {
                 changeoverTime = 0.0;
             } 
-            var processTime = ProcessTimes[(orderName, resource.Name)];
 
             var end = (resourceEnd.AddHours(changeoverTime) > orderEnd) switch
             {
@@ -852,10 +867,11 @@ public class CSharpSimulator : ISimulator
             {
                 bestEnd = end;
                 bestRes = resource;
+                bestOperation = gapIndex;
             }
         }
 
-        return bestRes;
+        return (bestOperation, bestRes);
     }
     private double GetChangeover(Resource resource, string order)
     {
@@ -943,7 +959,7 @@ public class CSharpSimulator : ISimulator
 
         if (allocatableResources.Count > 0)
         {
-            var bestResource = FindBestResource(allocatableResources, order);
+            var (bestOperationIdx, bestResource) = FindBestResource(allocatableResources, order);
             /*
             if (allocations.ContainsKey(order.Name))
             {
@@ -960,7 +976,7 @@ public class CSharpSimulator : ISimulator
             */
             var changeoverTime = GetChangeover(bestResource, order.Name.Split("_").First());
 
-            var resourceEnd = bestResource.Operations.Last().End;
+            var resourceEnd = bestResource.Operations[bestOperationIdx].End;
             var orderEnd = order.Operations.Last().End;
 
             // Check if the last operation of the best resource is a changeover. Overwrite it then. Or start at 
@@ -982,10 +998,11 @@ public class CSharpSimulator : ISimulator
                     Order = order.Name,
                     Unit = bestResource.Name
                 };
-                bestResource.Operations.Add(changeoverOperation);
+                bestResource.Operations.Insert(++bestOperationIdx, changeoverOperation);
+                // bestOperationIdx++;
                 order.Operations.Add(changeoverOperation);
                 // update end of resource
-                resourceEnd = bestResource.Operations.Last().End;
+                resourceEnd = bestResource.Operations[bestOperationIdx].End;
                 
             }
 
@@ -1007,13 +1024,13 @@ public class CSharpSimulator : ISimulator
             };
 
             // Shift the changeover to the last possible start time
-            if (bestResource.Operations.Last().Name.Contains("Changeover"))
+            if (bestResource.Operations[bestOperationIdx].Name.Contains("Changeover"))
             {
-                bestResource.Operations.Last().End = nextOperation.Start;
-                bestResource.Operations.Last().Start = bestResource.Operations.Last().End.AddHours(-bestResource.Operations.Last().Duration);
+                bestResource.Operations[bestOperationIdx].End = nextOperation.Start;
+                bestResource.Operations[bestOperationIdx].Start = bestResource.Operations[bestOperationIdx].End.AddHours(-bestResource.Operations.Last().Duration);
             }
 
-            bestResource.Operations.Add(nextOperation);
+            bestResource.Operations.Insert(++bestOperationIdx, nextOperation);
             order.Operations.Add(nextOperation);
         }
         else
