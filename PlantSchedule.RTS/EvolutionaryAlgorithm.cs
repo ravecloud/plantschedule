@@ -1201,16 +1201,18 @@ public class EvolutionaryAlgorithm
         for (int i = 0; i < w.Orders.Count; i++)
         {
             var lastOperation = w.Orders[i].Operations.Last();
-            if (lastOperation.End < SimulationStart)
+            if (lastOperation.End <= SimulationStart)
             {
                 // remove order from gene
                 var gene = ((Gene<String>)reference.Genes[0]).Values;
                 var j = gene.FindIndex(x => x == lastOperation.Order);
                 gene.RemoveAt(j);
+                // operationsToRemove.AddRange(w.Orders[i].Operations.GetRange(0, w.Orders[i].Operations.Count));
+                // w.Orders[i].Operations.RemoveRange(0, w.Orders[i].Operations.Count);
                 // remove prder from worker
                 w.Orders.RemoveAt(i);
                 i--;
-                break;
+                continue;
             }
 
             var rangeIndex = w.Orders[i].Operations.Count;

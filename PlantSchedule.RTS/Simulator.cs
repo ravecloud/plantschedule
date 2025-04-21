@@ -431,8 +431,25 @@ public class CSharpSimulator : ISimulator
 
     private void PrepareSimulation(Individual ind, Individual reference, int skipId = -1)
     {
+        skipId = -1;
         Gene<string>? orderGene = ind.Genes.Find(x => x.Name == GeneName.Order) as Gene<string>;
         if (orderGene == null) throw new Exception($"Could not find a gene with gene type {GeneName.Order.ToString()}");
+
+        // Remove finished orders
+        if (reference != null)
+        {
+            Gene<string>? referenceGene = reference.Genes.Find(x => x.Name == GeneName.Order) as Gene<string>;
+            var vals = orderGene.Values;
+            for (int i = vals.Count - 1; i >= 0; i--)
+            {
+                if (!referenceGene.Values.Contains(vals[i]))
+                {
+                    vals.RemoveAt(i);
+                    i--;
+                }
+            }
+        }
+
         InitResources(ind);
         InitOrders(ind, orderGene);
         if (reference != null && skipId != ind.Id) { 
@@ -792,7 +809,7 @@ public class CSharpSimulator : ISimulator
         return allocatableResources;
             
     }
-    private (int, Resource) FindBestResource(List<Resource> resources, Order order)
+    private (int, Resource) FindBestResourceWithOperationIndex(List<Resource> resources, Order order)
     {
         // TODO: Add feature that opeartions can be added in gaps
         // [ op1, gap1, ch2, op2, gap2, ch2, op2]
@@ -803,7 +820,7 @@ public class CSharpSimulator : ISimulator
         var bestOperation = -1;
 
         // TODO: Account for changeover times that are already there.
-        // TODO: P18_00 is twice in the gantt
+        // TODO: P18_00 is twice in the gantt -> because it was finished and reallocated
         foreach (var resource in resources)
         {
             var gapIndex = resource.Operations.Count - 1;
@@ -817,6 +834,7 @@ public class CSharpSimulator : ISimulator
             {
                 var op1 = resource.Operations[i];
                 var op2 = resource.Operations[i + 1];
+                var totalProcessTime = changeoverTime + processTime;
                 if (op1.Order == op2.Order) // Make sure that it is no chanvover or cleaning
                 {
                     continue;
@@ -824,35 +842,37 @@ public class CSharpSimulator : ISimulator
                 var gap = op2.Start.Subtract(op1.End).TotalHours;
                 if (gap == 0.0) continue;
 
-                var totalProcessTime = changeoverTime + processTime;
+                // Since it already is a changeover 
+                if(op1.Order == order.Name && op1.Name.Contains("Changeover"))
+                {
+                    totalProcessTime -= changeoverTime;
+                }
+                
+                if(this.SimulationStart > new DateTime(2020, 1, 1, 13, 20, 00) && order.Name == "P05_Rush" && resource.Name == "M03")
+                {
+                    Console.WriteLine();
+                }
+
                 if (op1.End >= order.Operations.Last().End && // check if last operation of order ends to the right time
                     op2.Start >= op1.End.AddHours(totalProcessTime)) // check if last operation of order fits into the gap
                 {
+
                     gaps.Add(i, gap);
                 }
             }
 
+            if (gaps.Count > 0) gapIndex = gaps.OrderByDescending(kvp => kvp.Value).First().Key;
+            resourceEnd = resource.Operations[gapIndex].End;
+            
             // Here we can fill spots in the schedule
-            if (resource.Operations.Last().Name.Contains("Changeover") && resource.Operations.Last().Order != order.Name)
+            if (false && resource.Operations[gapIndex].Name.Contains("Changeover") && resource.Operations.Last().Order != order.Name)
             {
                 // since the changeover started before the simulation and carrys on
                 // basically the changeover is preempted
                 resourceEnd = SimulationStart;
-
-            }
-            else if (gaps.Count > 0)
-            {
-                // we also have to check if the order ends at the same time of the gap
-                var operationKey = gaps.OrderByDescending(kvp => kvp.Value).First().Key;
-                resourceEnd = resource.Operations[operationKey].End;
-                gapIndex = operationKey;
-            }
-            else
-            { 
-                resourceEnd = resource.Operations.Last().End;
             }
 
-            if (resource.Operations.Last().Name.Contains("Changeover") && resource.Operations.Last().Order == order.Name)
+            if (resource.Operations[gapIndex].Name.Contains("Changeover") && resource.Operations[gapIndex].Order == order.Name)
             {
                 changeoverTime = 0.0;
             } 
@@ -959,7 +979,7 @@ public class CSharpSimulator : ISimulator
 
         if (allocatableResources.Count > 0)
         {
-            var (bestOperationIdx, bestResource) = FindBestResource(allocatableResources, order);
+            var (bestOperationIdx, bestResource) = FindBestResourceWithOperationIndex(allocatableResources, order);
             /*
             if (allocations.ContainsKey(order.Name))
             {
