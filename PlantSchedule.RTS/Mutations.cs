@@ -85,6 +85,7 @@ public static class Mutations<T> where T : IComparable<T>
         {
             index2++;
         }
+        if (index2 >= values.Count) index2--;
 
         // Swap values
         (values[index1], values[index2]) = (values[index2], values[index1]);

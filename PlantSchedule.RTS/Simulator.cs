@@ -7,6 +7,7 @@ using PlantSchedule.DTO;
 using Timer = System.Timers.Timer;
 using System.Data;
 using System.Collections.Generic;
+using System.Xml;
 
 
 namespace PlantSchedule.RTS;
@@ -273,7 +274,7 @@ public class CSharpSimulator : ISimulator
                         break;
                     default:
                         // Default is Process or Wait
-                        Step(order, resources, nextStage);
+                        Step(order, resources, orders, nextStage);
                         break;
                 }
             }
@@ -431,7 +432,7 @@ public class CSharpSimulator : ISimulator
 
     private void PrepareSimulation(Individual ind, Individual reference, int skipId = -1)
     {
-        skipId = -1;
+        //skipId = -1;
         Gene<string>? orderGene = ind.Genes.Find(x => x.Name == GeneName.Order) as Gene<string>;
         if (orderGene == null) throw new Exception($"Could not find a gene with gene type {GeneName.Order.ToString()}");
 
@@ -830,6 +831,7 @@ public class CSharpSimulator : ISimulator
 
             // Search for all the gaps that are feasible 
             var gaps = new Dictionary<int,double>();
+#if TRUE
             for (int i = 0; i < resource.Operations.Count - 1; i++)
             {
                 var op1 = resource.Operations[i];
@@ -860,18 +862,19 @@ public class CSharpSimulator : ISimulator
                     gaps.Add(i, gap);
                 }
             }
-
+#endif
             if (gaps.Count > 0) gapIndex = gaps.OrderByDescending(kvp => kvp.Value).First().Key;
             resourceEnd = resource.Operations[gapIndex].End;
             
             // Here we can fill spots in the schedule
+            /*
             if (false && resource.Operations[gapIndex].Name.Contains("Changeover") && resource.Operations.Last().Order != order.Name)
             {
                 // since the changeover started before the simulation and carrys on
                 // basically the changeover is preempted
                 resourceEnd = SimulationStart;
             }
-
+            */
             if (resource.Operations[gapIndex].Name.Contains("Changeover") && resource.Operations[gapIndex].Order == order.Name)
             {
                 changeoverTime = 0.0;
@@ -972,7 +975,7 @@ public class CSharpSimulator : ISimulator
 
     }
 
-    private void Step(Order order, List<Resource> resources, string stage)
+    private void Step(Order order, List<Resource> resources, List<Order> orders, string stage)
     {
         // Only go in the wait state of the stage if it needs to be processed on this stage. Otherwise skip stage
         var allocatableResources = FindAllocatableResource(resources, order.Name, stage);
@@ -998,16 +1001,19 @@ public class CSharpSimulator : ISimulator
 
             var resourceEnd = bestResource.Operations[bestOperationIdx].End;
             var orderEnd = order.Operations.Last().End;
-
             // Check if the last operation of the best resource is a changeover. Overwrite it then. Or start at 
             if(changeoverTime > 0.0)
             {
-                if (bestResource.Operations.Last().Name.Contains("Changeover"))
+                if (bestResource.Operations[bestOperationIdx].Name.Contains("Changeover"))
                 {
                     // First change the last opeartion time 
-                    bestResource.Operations.Last().End = SimulationStart;
+                    var lastOperation = bestResource.Operations[bestOperationIdx];
+                    var orderIdx = orders.FindIndex(o => o.Name == lastOperation.Order);
+                    var lastOpIdx = orders[orderIdx].Operations.FindIndex(op => op.Equals(lastOperation));
+                    lastOperation.End = SimulationStart;
+                    if(lastOpIdx > -1) orders[orderIdx].Operations.RemoveRange(lastOpIdx, orders[orderIdx].Operations.Count - lastOpIdx);
                     resourceEnd = SimulationStart;
-
+                    // Delete the changeover in the orders list!!!
                 } 
                 var changeoverOperation = new Operation
                 {
@@ -1130,7 +1136,7 @@ public class CSharpSimulator : ISimulator
         }
         return operations;
     }
-    #endregion
+#endregion
 }
 #if KOPANOS_SIMULATOR
 public class KopanosSimulator : ISimulator

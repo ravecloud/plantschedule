@@ -485,11 +485,19 @@ public class EvolutionaryAlgorithm
     private void MeasureDistance(EvolutionaryAlgorithm ea)
     {
         // we assume that the population is ordered
+
         var bestInd = ea.Population[0];
         foreach (var ind in ea.Population)
         {
+            // First, remove from list1 anything not in list2
             var gene1 = (Gene<String>)ind.Genes[0];
             var gene2 = (Gene<String>)bestInd.Genes[0];
+            if (gene1.Values.Except(gene2.Values).Any() || gene2.Values.Except(gene1.Values).Any())
+            {
+                gene1.Values.RemoveAll(s => !gene2.Values.Contains(s));
+                gene2.Values.RemoveAll(s => !gene1.Values.Contains(s));
+            }
+
             var hammingDistance = DistanceMeasure.HammingDistance(gene1.Values, gene2.Values);
             ind.Measure = hammingDistance;
         }
@@ -1206,7 +1214,7 @@ public class EvolutionaryAlgorithm
                 // remove order from gene
                 var gene = ((Gene<String>)reference.Genes[0]).Values;
                 var j = gene.FindIndex(x => x == lastOperation.Order);
-                gene.RemoveAt(j);
+                if(j > -1) gene.RemoveAt(j);
                 // operationsToRemove.AddRange(w.Orders[i].Operations.GetRange(0, w.Orders[i].Operations.Count));
                 // w.Orders[i].Operations.RemoveRange(0, w.Orders[i].Operations.Count);
                 // remove prder from worker
