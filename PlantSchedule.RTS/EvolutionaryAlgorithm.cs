@@ -344,7 +344,7 @@ public class EvolutionaryAlgorithm
                     {
                         UpdateGeneration = ea.Generation,
                         //UpdateTime = config.SimulationStart.AddSeconds((ea.Generation + updateInterval) * config.TimeIncrement),
-                        UpdateTime = config.SimulationStart.AddSeconds(ea.Generation * config.TimeIncrement),
+                        UpdateTime = config.SimulationStart.AddSeconds(ea.Generation * config.TimeIncrement), // here, frozen period can be introduced
                         UpdateType = UpdateType.Time
                     };
                 }
@@ -519,6 +519,7 @@ public class EvolutionaryAlgorithm
                 this.Generation += 1;
                 this.Log(LogOption.Start);
                 this.Evaluate(EvalOpt.Population);
+                this.SelectSurvivors();
                 this.Log(LogOption.EndOfGeneration);
             }
             else
@@ -581,6 +582,8 @@ public class EvolutionaryAlgorithm
     private void WriteBestResult()
     {
         var bestWorker = JsonSerializer.Serialize(this.Population[0].Worker);
+        // Best individual
+        ((CSharpSimulator)this.Simulator).BestSolution = this.Population[0];
         File.WriteAllText(this.Config.ResultFolder + "bestWorker.json", bestWorker);
     }
 
@@ -1094,6 +1097,7 @@ public class EvolutionaryAlgorithm
             this.SimulationEnd = this.SimulationEnd.Add(timeDiff);
             this.HasUpdates = true;
         }
+
         if (updateEvent.UpdateType.HasFlag(UpdateType.Order))
         {
             if (this.Config is CSharpConfig && ((CSharpConfig)this.Config).PopulationContinuity == "Best")
@@ -1141,6 +1145,7 @@ public class EvolutionaryAlgorithm
             this.SetParametersFromConfig();
             this.HasUpdates = true;
         }
+
         if (updateEvent.UpdateType.HasFlag(UpdateType.Maintenance))
         {
             foreach (var ind in this.Population)
@@ -1154,6 +1159,7 @@ public class EvolutionaryAlgorithm
             }
             this.HasUpdates = true;
         }
+
         if (updateEvent.UpdateType.HasFlag(UpdateType.Delay))
         {
             foreach (var ind in this.Population)
@@ -1814,9 +1820,18 @@ public class EvolutionaryAlgorithm
             var parent2 = this.Population[parentIdx2];
 
             // Recombine
-            (IGene gene1, IGene gene2) = parent1.Genes[0].Recombine(parent2.Genes[0]);
-            AddOffspring(gene1);
-            AddOffspring(gene2);
+            var randomDouble = new Random().NextDouble();
+            if(this.CrossoverRate >= randomDouble)
+            {
+                (IGene gene1, IGene gene2) = parent1.Genes[0].Recombine(parent2.Genes[0]);
+                AddOffspring(gene1);
+                AddOffspring(gene2);
+            }
+            else
+            {
+                AddOffspring(parent1.Genes[0].Copy());
+                AddOffspring(parent2.Genes[0].Copy());
+            }
         }
     }
 
@@ -1857,7 +1872,7 @@ public class EvolutionaryAlgorithm
         foreach (var offspring in Offspring)
         {
             var randomDouble = new Random().NextDouble();
-            if (this.MutationRate > randomDouble)
+            if (this.MutationRate >= randomDouble)
             {
                 offspring.Mutate();
             }
@@ -1893,13 +1908,23 @@ public class EvolutionaryAlgorithm
 
         // Order current population
         Population = Population.OrderBy(x => x.Fitness[Objective]).ToList();
-
+        Console.WriteLine($"ID: {Population[0].Id} NERV: {Population[0].Worker.SimulationInstance.Objectives["Nervousness"]}");
         // Increase age
         Population.ForEach(x => x.Age += 1);
 
         // Clear container
         allIndividuals.Clear();
         Offspring.Clear();
+        var bestInd = Population[0];
+        var bestSol = ((CSharpSimulator)this.Simulator).BestSolution;
+        if (bestSol != bestInd)
+        {
+            ((CSharpSimulator)this.Simulator).BestSolution = Population[0];
+        }
+        else
+        {
+            bestInd.Worker.SimulationInstance.Objectives["Nervousness"] = 0.0;
+        }
     }
 
     public void Evaluate(EvalOpt option = EvalOpt.Init)

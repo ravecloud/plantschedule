@@ -10,7 +10,6 @@ using PlantSchedule.RTS;
 using System.Globalization;
 using System.Reflection;
 
-// Set culture
 CultureInfo englishCulture = new CultureInfo("en-US");
 CultureInfo.DefaultThreadCurrentCulture = englishCulture;
 
@@ -18,11 +17,11 @@ CultureInfo.DefaultThreadCurrentCulture = englishCulture;
 var currPath = Directory.GetCurrentDirectory();
 string? assembyDirectoryPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
 if (assembyDirectoryPath == null) throw new Exception("Assembly directoy path could not be found");
-
+var configPath = Path.Combine(currPath, "config.json");
 Console.WriteLine($"{currPath} \n{assembyDirectoryPath}");
 
-
-var config = new CSharpConfig().Deserialize(assembyDirectoryPath);
+if(args.Length > 0) configPath = args[0];
+var config = new CSharpConfig().Deserialize(configPath);
 
 // Init ea
 var ea = new EvolutionaryAlgorithm(config);

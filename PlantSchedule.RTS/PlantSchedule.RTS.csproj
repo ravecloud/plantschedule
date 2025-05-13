@@ -44,6 +44,9 @@
       <None Update="CsvFiles\ProcessTimes.csv">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       </None>
+      <None Update="CsvFiles\StageMachineMap.csv">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </None>
       <None Update="ea.json">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       </None>

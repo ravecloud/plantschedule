@@ -24,6 +24,7 @@ public class CSharpConfig : IConfig
     public string TimeStamp { get ; set ; }
     public string BasePath { get; set; }
     public string ResultFolder { get ; set ; }
+    public string CsvDirectory { get; set; }
     public bool ParallelExecution { get; set; }
     public bool EvalAllOrders { get; set; }
 
@@ -62,6 +63,7 @@ public class CSharpConfig : IConfig
     {
         // Folders and directories
         BasePath = other.BasePath;
+        CsvDirectory = other.CsvDirectory;
         TimeStamp = DateTime.Now.ToString("yyMMdd_HHmmss"); //timeStamp ;
         ResultDirectory = other.BasePath + "\\" + other.ResultDirectory;
         if (other.ResultFolder == "") ResultFolder = ResultDirectory + TimeStamp + "\\";
@@ -109,6 +111,7 @@ public class CSharpConfig : IConfig
         int numberOfWorkers,
         string timeStamp,
         string basePath,
+        string csvDirectory,
         string resultDirectory,
         bool parallelExecution,
         bool evalAllOrders,
@@ -142,6 +145,7 @@ public class CSharpConfig : IConfig
     {
         // Folders and directories
         BasePath = basePath;
+        CsvDirectory = csvDirectory;
         TimeStamp = DateTime.Now.ToString("yyMMdd_HHmmss"); //timeStamp ;
         ResultDirectory = basePath + "\\" + resultDirectory;
         if (resultFolder == "") ResultFolder = ResultDirectory + TimeStamp + "\\";
@@ -191,7 +195,7 @@ public class CSharpConfig : IConfig
     public CSharpConfig Deserialize(string currPath)
     {
         var config = JsonSerializer
-            .Deserialize<CSharpConfig>(File.ReadAllText(Path.Combine(currPath, "config.json")));
+            .Deserialize<CSharpConfig>(File.ReadAllText(currPath));
         return new CSharpConfig(config);
     }
     public CSharpConfig CopyConfigToResultsFolder(string currPath)

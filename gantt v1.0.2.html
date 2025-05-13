@@ -150,13 +150,14 @@
             <input type="number" id="delaySpinBox" min="1" max="60000" value="1000" style="width: 70px;">
         </label>
         <button id="exportButton">Export Gantt</button>
+        <label>Y Min: <input type="number" id="yMinInput" value="-10" step="0.1"></label>
+        <label>Y Max: <input type="number" id="yMaxInput" value="10" step="0.1"></label>
     </div>
 
     <div id="tooltip"></div>
 
     <div id="chartSection">
-        <div id="chart"></div>
-        <div id="fitnessPlot"></div>
+        <div id="chart"></div> <div id="fitnessPlot"></div>
     </div>
 
     <div id="ordersList">
@@ -311,7 +312,139 @@
 
       // --- Parse the schedule JSON ---
       let values = Object.values(row);
-      Object.entries(op).forEach(([k, v]) => { text += `<b>${k}:</b> ${v}<br/>`; });
+      let jsonStr = values.length > 0 ? values[values.length - 1] : null;
+      let scheduleData = {};
+      if (jsonStr) {
+          try { scheduleData = JSON.parse(jsonStr); }
+          catch (e) { console.error("Error parsing JSON schedule:", e, jsonStr); scheduleData = { "Resources": [], "Orders": [] }; }
+      } else { console.warn("No JSON schedule data found for row:", currentRowIndex); scheduleData = { "Resources": [], "Orders": [] }; }
+      let resources = scheduleData["Resources"] || [];
+      let ordersList = scheduleData["Orders"] || [];
+
+      // --- Cache data before plotting Gantt ---
+      lastGanttResources = resources;
+      lastGanttTimeRange = timeRange;
+      lastGanttSimStart = simStart;
+
+      // --- Draw/Redraw the Gantt Chart ---
+      // Uses the persistent `selectedOrderNames` Set for highlighting
+      plotGantt(resources, timeRange, simStart);
+
+      // --- Update the Fitness Plot ---
+      plotFitness(csvData.slice(0, currentRowIndex + 1));
+
+      // --- Update the Orders Information Table ---
+      // Updates `allOrders`, rebuilds table, adds click handlers, and re-applies selection style
+      updateOrdersList(ordersList);
+    }
+
+
+    // ---------------------------
+    // Function: Renders the Gantt chart using D3.js.
+    // **MODIFIED** to handle multiple selections and assign unique colors.
+    // ---------------------------
+    function plotGantt(resources, timeRange, simStart) {
+      d3.select("#chart").select("svg").remove(); // Clear previous SVG
+
+      const chartDiv = document.getElementById("chart");
+      const containerWidth = Math.max(chartDiv.clientWidth, 100);
+      const containerHeight = Math.max(chartDiv.clientHeight, 100);
+      const margin = { top: 40, right: 20, bottom: 40, left: 100 };
+      const innerW = Math.max(containerWidth - margin.left - margin.right, 50);
+      const innerH = Math.max(containerHeight - margin.top - margin.bottom, 50);
+
+      const svg = d3.select("#chart").append("svg")
+        .attr("width", containerWidth).attr("height", containerHeight)
+        .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+      svg.append("text").attr("x", innerW / 2).attr("y", -margin.top / 2)
+         .attr("text-anchor", "middle").style("font-size", "16px")
+         .style("text-decoration", "underline").text("Gantt Chart");
+
+      // Scales
+      const x = d3.scaleTime().domain(timeRange).range([0, innerW]);
+      const resourceNames = resources.map(r => r["Name"] || "Unknown");
+      const y = d3.scaleBand().domain(resourceNames).range([0, innerH]).padding(0.1);
+
+      // Axes
+      svg.append("g").attr("transform", `translate(0,${innerH})`).call(d3.axisBottom(x).ticks(6));
+      svg.append("g").call(d3.axisLeft(y));
+
+      // Base color function (unchanged)
+      function getColor(opName, opOrder) {
+        let c = "steelblue"; let nameLower = (opName || "").toLowerCase(); let orderLower = (opOrder || "").toLowerCase();
+        if (nameLower.includes("process")) { c = "lightblue"; if (orderLower.includes("rush")) c = "red"; }
+        else if (nameLower.includes("changeover")) { c = "gray"; if (orderLower.includes("rush")) c = "orange"; }
+        else if (nameLower.includes("wait") || nameLower.includes("idle")) { c = "white"; }
+        return c;
+      }
+
+      // Convert Set to Array once for efficient index lookup during color assignment
+      const selectionArray = Array.from(selectedOrderNames);
+
+      // Plot Bars
+      resources.forEach(resource => {
+        const ops = resource["Operations"] || [];
+        const resourceName = resource["Name"] || "Unknown";
+
+        ops.forEach(op => {
+          let startStr = op["Start"], endStr = op["End"];
+          if (!startStr || !endStr) return;
+          let startTime = new Date(startStr), endTime = new Date(endStr);
+          if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) return;
+          if (endTime <= timeRange[0] || startTime >= timeRange[1]) return;
+
+          let clippedStartTime = startTime < timeRange[0] ? timeRange[0] : startTime;
+          let clippedEndTime = endTime > timeRange[1] ? timeRange[1] : endTime;
+          if (clippedStartTime >= clippedEndTime) return;
+
+          const barX = x(clippedStartTime);
+          const barY = y(resourceName);
+          const barWidth = Math.max(1, x(clippedEndTime) - barX); // Min width 1px
+          const barHeight = y.bandwidth();
+          if (isNaN(barX) || isNaN(barY) || isNaN(barWidth) || barWidth <= 0 || isNaN(barHeight)) return;
+
+          const opName  = op["Name"]  || "";
+          const opOrder = op["Order"] || "";
+          const baseFillColor = getColor(opName, opOrder);
+
+          // **NEW**: Determine highlighting based on multiple selections
+          const isSelected = selectedOrderNames.has(opOrder);
+          let barStroke = 'black';
+          let barStrokeWidth = 0.5;
+          let barOpacity = 1.0;
+
+          if (selectedOrderNames.size > 0) { // Apply highlighting/dimming only if any order is selected
+              if (isSelected) {
+                  // Find index of this order in the selection array for consistent color
+                  const colorIndex = selectionArray.indexOf(opOrder);
+                  if (colorIndex !== -1) { // Should always be found if isSelected is true
+                     barStroke = highlightColors[colorIndex % highlightColors.length]; // Assign color cyclically
+                  } else {
+                     barStroke = 'red'; // Fallback color if something goes wrong
+                  }
+                  barStrokeWidth = 2.5; // Thicker border for selected
+                  barOpacity = 1.0;     // Full opacity for selected
+              } else {
+                  // Dim operations not part of the current selection
+                  barOpacity = 0.5; // Dimming factor
+                  barStroke = 'grey'; // Use grey border for dimmed items maybe? Or keep black? Let's try grey.
+                  barStrokeWidth = 0.5;
+              }
+          }
+          // If selectedOrderNames.size is 0, defaults (black, 0.5, 1.0) remain
+
+          // Append rect with calculated styles
+          svg.append("rect")
+             .attr("x", barX).attr("y", barY)
+             .attr("width", barWidth).attr("height", barHeight)
+             .attr("fill", baseFillColor) // Use the base color logic for fill
+             .attr("stroke", barStroke)
+             .attr("stroke-width", barStrokeWidth)
+             .attr("opacity", barOpacity)
+             .on("mouseover", (event) => { /* Tooltip logic unchanged */
+                const tooltip = d3.select("#tooltip"); let text = "";
+                Object.entries(op).forEach(([k, v]) => { text += `<b>${k}:</b> ${v}<br/>`; });
                 tooltip.html(text).style("left", (event.pageX + 10) + "px")
                    .style("top", (event.pageY + 10) + "px").style("display", "block");
              })
@@ -348,8 +481,14 @@
       svg.append("text").attr("x", innerW / 2).attr("y", -10).attr("text-anchor", "middle").style("font-size", "14px").text("Fitness over Generations");
       let points = dataSlice.map(row => { const gen = parseFloat(row["Generation"]), fit = parseFloat(row["Fitness"]); return (isNaN(gen) || isNaN(fit)) ? null : { generation: gen, fitness: fit }; }).filter(p => p !== null);
       points.sort((a, b) => a.generation - b.generation);
+
+      const yMinVal = parseFloat(document.getElementById("yMinInput").value);
+      const yMaxVal = parseFloat(document.getElementById("yMaxInput").value);
+      const yDomainMin = !isNaN(yMinVal) ? yMinVal : d3.min(points, d => d.fitness);
+      const yDomainMax = !isNaN(yMaxVal) ? yMaxVal : d3.max(points, d => d.fitness);
+
       const x = d3.scaleLinear().domain([0, maxGeneration > 0 ? maxGeneration : 1]).range([0, innerW]).nice();
-      const y = d3.scaleLinear().domain([-10, 10]).range([innerH, 0]); // Fixed Y
+      const y = d3.scaleLinear().domain([yMinVal, yMaxVal]).range([innerH, 0]); // Fixed Y
       svg.append("g").attr("transform", `translate(0, ${innerH})`).call(d3.axisBottom(x).ticks(5));
       svg.append("text").attr("text-anchor", "middle").attr("x", innerW / 2).attr("y", innerH + margin.bottom - 5).text("Generation");
       svg.append("g").call(d3.axisLeft(y));

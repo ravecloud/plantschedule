@@ -83,16 +83,21 @@ public class PlantSimulator : ISimulator
 public class CSharpSimulator : ISimulator
 {
     #region PUBLIC MEMBERS
+    public Individual BestSolution { get; set; }
     public DateTime SimulationStart { get; set; }
     public DateTime SimulationEnd { get; set; }
-    public Dictionary<(string,string), double> ProcessTimes { get; set; }   
+    public Dictionary<(string,string), double> ProcessTimes { get; set; }
+    public Dictionary<string, Dictionary<(string, string), double>> ChangeoverTimes { get; set; } = new();
+    /*
     public Dictionary<(string,string), double> ChangeoverTimes_S1 { get; set; }   
     public Dictionary<(string,string), double> ChangeoverTimes_S2 { get; set; }   
     public Dictionary<(string,string), double> ChangeoverTimes_S3 { get; set; }   
     public Dictionary<(string,string), double> ChangeoverTimes_S4 { get; set; }   
     public Dictionary<(string,string), double> ChangeoverTimes_S5 { get; set; }   
     public Dictionary<(string,string), double> ChangeoverTimes_S6 { get; set; }
+    */
     public List<string> Orders { get; set; } = new List<string>();
+    public List<string> Resources { get; set; } = new List<string>();
     public Dictionary<String, DateTime> DueDates;
     public CSharpConfig Config { get; set; }
     public readonly Dictionary<String, List<String>> StageMachineMap = new Dictionary<string, List<string>>()
@@ -155,15 +160,18 @@ public class CSharpSimulator : ISimulator
     {
         this.Config = (CSharpConfig)config;
         var csvDir = "CsvFiles";
+        if (!string.IsNullOrEmpty(this.Config.CsvDirectory)) csvDir = this.Config.CsvDirectory;
         if (Directory.Exists(csvDir))
         {
             var sw = new Stopwatch();
 
             sw.Start();
-            var files = Directory.GetFiles("CsvFiles");
+            var files = Directory.GetFiles(this.Config.CsvDirectory);
             foreach (var file in files)
             {
-                var propertyName = file.Split('.').First().Split('\\').Last();
+                var propertyName = file.Split('\\').Last().Split('.').First();
+                var stage = propertyName.Split("_").Last();
+                /*
                 switch (propertyName)
                 {
                     case "ProcessTimes":
@@ -191,20 +199,48 @@ public class CSharpSimulator : ISimulator
                     default:
                         break;
                 }
+                */
+                if (propertyName.Contains("ChangeoverTimes"))
+                {
+                    ChangeoverTimes[stage] = ReadCsvFile(file);
+                }
+                else if (propertyName.Contains("ProcessTimes"))
+                {
+                    ProcessTimes = ReadCsvFile(file);
+                }
+                else if (propertyName.Contains("StageMachineMap"))
+                {
+                    StageMachineMap = ReadStageMachineMap(file);
+                    // Assumes at the moment that each resources is unique on a stage
+                    foreach (var item in StageMachineMap) Resources.AddRange(item.Value);
+                }
+                else if (propertyName == "Order")
+                {
+                    Orders = ReadProductsFile(file);
+                }
             }
+
             sw.Stop();
             Console.WriteLine($"Elapsed milliseconds to read files: {sw.Elapsed}ms.");
         }
+        else
+        {
+            throw new DirectoryNotFoundException($"Could not find directory {this.Config.CsvDirectory}");
+        }
+
         // Initialize the genome
         this.DueDates = new();
         var rand = new Random();
-        var numOrders = 30;
+        var numOrders = Orders.Count(); // Hardcoded! Needs to be changed!!
         var addToDueDate = 4;
         var addToDueDateInc = 0;
         var orderBatch = 10;
         var dueDateStart = 16;
         var dueDateEnd = 20;
         var randomList = GenerateUniqueRandomList(numOrders, 1, numOrders + 1);
+
+        // Solve this via csv
+        Orders = new();
         for (int i = 1; i <= numOrders; i++)
         {
             var j = randomList[i - 1];
@@ -214,7 +250,7 @@ public class CSharpSimulator : ISimulator
                 addToDueDate += 5 + addToDueDateInc;
                 addToDueDateInc += addToDueDateInc;
             }
-            var rem = ((j-1)/30);
+            var rem = ((j - 1) / 30);
             var recipe = "P" + ((j - (rem * 30)).ToString("D2"));
             var orderName = "P" + ((j - (rem * 30)).ToString("D2")) + "_" + rem.ToString("D2");
             Orders.Add(orderName);
@@ -222,11 +258,12 @@ public class CSharpSimulator : ISimulator
         }
 
         Config = (CSharpConfig)config;
-        if(Config.RushOrders != null && Config.RushOrders.Count > 0)
+        if (Config.RushOrders != null && Config.RushOrders.Count > 0)
         {
             foreach (var rushOrder in Config.RushOrders)
             {
-                if (!this.DueDates.ContainsKey(rushOrder.Key)){
+                if (!this.DueDates.ContainsKey(rushOrder.Key))
+                {
                     // Orders.Add(rushOrder.Key);
                     var rushOrderStart = Config.SimulationStart.AddSeconds(rushOrder.Value[0] * Config.TimeIncrement);
                     this.DueDates.Add(rushOrder.Key, rushOrderStart.AddHours(rushOrder.Value[1]));
@@ -289,7 +326,7 @@ public class CSharpSimulator : ISimulator
     private void InitWorker(Individual ind, Gene<string> orderGene)
     {
         InitResources(ind);
-        InitOrders(ind, orderGene);
+        InitOrders(ind, orderGene, false);
     }
     
     private void InitResources(Individual ind)
@@ -314,10 +351,57 @@ public class CSharpSimulator : ISimulator
             }
         } 
     }
-
-    public void InitOrders(Individual ind, Gene<string> orderGene)
+    public Dictionary<string,List<string>> ReadStageMachineMap(string csvFilePath)
     {
-        ind.Worker.Orders = new List<Order>();
+        var stageMachineMap = new Dictionary<string, List<string>>();
+        using (var reader = new StreamReader(csvFilePath))
+        {
+            // Read and split header line
+            var headers = reader.ReadLine()?.Split(','); // ["Machine", "S1", "S2", ...]
+            if (headers == null || headers.Length < 2)
+                throw new InvalidDataException("CSV header is invalid");
+
+            // Initialize dictionary entries for each stage
+            for (int i = 1; i < headers.Length; i++)
+            {
+                stageMachineMap[headers[i].Trim()] = new List<string>();
+            }
+
+            // Process each machine row
+            while (!reader.EndOfStream)
+            {
+                var parts = reader.ReadLine()?.Split(',');
+                if (parts == null || parts.Length != headers.Length)
+                    continue; // or handle invalid rows
+
+                var machine = parts[0].Trim();
+
+                for (int col = 1; col < parts.Length; col++)
+                {
+                    if (parts[col].Trim() == "1")
+                    {
+                        var stage = headers[col].Trim();
+                        stageMachineMap[stage].Add(machine);
+                    }
+                }
+            }
+        }
+        return stageMachineMap;
+    }
+    public void InitOrders(Individual ind, Gene<string> orderGene, bool skip)
+    {
+        if (skip)
+        {
+            ind.Worker.Orders = new List<Order>();
+        }
+        /*
+        else
+        {
+            this.BestSolution = ind;
+        }
+        */
+
+
         foreach (var order in orderGene.Values)
         {
             // Only add new order if it does not exist yet
@@ -328,7 +412,7 @@ public class CSharpSimulator : ISimulator
 
             var start = this.Config.SimulationStart;
             var end = this.Config.SimulationEnd;
-            if(Config.ReleaseDates != null && Config.ReleaseDates.ContainsKey(order))
+            if (Config.ReleaseDates != null && Config.ReleaseDates.ContainsKey(order))
             {
                 start = Config.ReleaseDates[order];
                 end = Config.ReleaseDates[order];
@@ -452,10 +536,10 @@ public class CSharpSimulator : ISimulator
         }
 
         InitResources(ind);
-        InitOrders(ind, orderGene);
+        InitOrders(ind, orderGene, skipId != ind.Id);
         if (reference != null && skipId != ind.Id) { 
             AddOperationsFromReference(ind, reference);
-        }
+        } 
     }
     #endregion
     #region PUBLIC METHODS
@@ -463,6 +547,7 @@ public class CSharpSimulator : ISimulator
     {
         var sw = new Stopwatch();
         sw.Start();
+        // BestSolution = individuals.First();
 
         if (Config.ParallelExecution)
         {
@@ -510,12 +595,20 @@ public class CSharpSimulator : ISimulator
 
         var tardiness = 0.0;
         var makespan = 0.0;
+        var absoluteMakespan = 0.0;
         var earliness = 0.0;
         var tardinessList = new List<double>();
         var earlinessList = new List<double>();
+        var earliestStart = orders.Min(o => o.Operations[0].Start);
 
-        var firstResources = ind.Worker.Resources.GetRange(0, 2);
-        var lastResources = ind.Worker.Resources.GetRange(14, 3);
+        var firstStage = this.StageMachineMap.Keys.First();
+        var lastStage = this.StageMachineMap.Keys.Last();
+        var firstResources = ind.Worker.Resources
+            .Where(item => this.StageMachineMap[firstStage].Contains(item.Name))
+            .ToList(); 
+        var lastResources = ind.Worker.Resources
+            .Where(item => this.StageMachineMap[lastStage].Contains(item.Name))
+            .ToList(); 
         if (Config.EvalAllOrders)
         {
             var orderDict = new Dictionary<string, DateTime>();
@@ -555,9 +648,11 @@ public class CSharpSimulator : ISimulator
                     earlinessList.Add(timeSpan.TotalHours);
                 }
                 var completionTime = order.Value - ind.Worker.SimulationInstance.SimulationStart; //order.Operations.First().Start;
+                var absoluteCompletionTime = order.Value - earliestStart; //order.Operations.First().Start; 
                 if (completionTime.TotalHours > makespan)
                 {
                     makespan = completionTime.TotalHours;
+                    absoluteMakespan = absoluteCompletionTime.TotalHours;
                 }
                 // Console.WriteLine($"{order.Key}:{order.Value}");
             }
@@ -584,6 +679,7 @@ public class CSharpSimulator : ISimulator
                     earlinessList.Add(timeSpan.TotalHours);
                 }
                 var completionTime = order.Operations.Last().End - ind.Worker.SimulationInstance.SimulationStart; //order.Operations.First().Start;
+                var absoluteCompletionTime =order.Operations.Last().End - earliestStart; //order.Operations.First().Start; 
                 if (completionTime.TotalHours > makespan)
                 {
                     makespan = completionTime.TotalHours;
@@ -610,6 +706,9 @@ public class CSharpSimulator : ISimulator
         // Set objectives
         //if (ind.Worker.InosimInstance.Objectives ) 
         // TODO: Check if reasonable?
+
+
+
         ind.Worker.SimulationInstance.Objectives = new Dictionary<string, double>();
         ind.Worker.SimulationInstance.Objectives.Add("Tardiness", tardiness);
         ind.Worker.SimulationInstance.Objectives.Add("Lateness", lateness);
@@ -625,6 +724,8 @@ public class CSharpSimulator : ISimulator
         ind.Worker.SimulationInstance.Objectives.Add("TotalAvgEarlinessTotalAvgTardiness", totalAvgTardinesTotalAvgEarliness);
         ind.Worker.SimulationInstance.Objectives.Add("TardinessEarliness", tardinessEarliness);
         ind.Worker.SimulationInstance.Objectives.Add("Makespan", makespan);
+        ind.Worker.SimulationInstance.Objectives.Add("AbsoluteMakespan", absoluteMakespan);
+        GetNervousness(ind);
 
         // Set fitness
         ind.FitnessName = ((CSharpConfig)Config).Objective;
@@ -635,7 +736,23 @@ public class CSharpSimulator : ISimulator
         // Serialize worker
         // ind.Json = JsonSerializer.Serialize(ind.Worker);
     }
-
+    private void GetNervousness(Individual ind)
+    {
+        ind.Worker.SimulationInstance.Objectives.Add("Nervousness", 0.0);
+        var nervousness = 1.0;
+        if (this.BestSolution != null && ind != this.BestSolution) {
+            var indListOperations = new List<string>();
+            var refListOperations = new List<string>();
+            foreach (var indResource in ind.Worker.Resources)
+            {
+                var refResource = this.BestSolution.Worker.Resources.Find(x=> x.Name == indResource.Name);
+                indListOperations.AddRange(indResource.Operations.Select(op => op.Order).ToList());
+                refListOperations.AddRange(refResource.Operations.Select(op => op.Order).ToList());
+            }
+            nervousness = DistanceMeasure.JaroWinklerSimilarity<string>(refListOperations, indListOperations);
+        }
+        ind.Worker.SimulationInstance.Objectives["Nervousness"] = 1 - nervousness;
+    }
     public void Simulate(string json)
     {
         throw new NotImplementedException();
@@ -736,6 +853,36 @@ public class CSharpSimulator : ISimulator
     }
 #endregion
     #region PRIVATE METHODS
+    private List<string> ReadProductsFile(string file)
+    {
+
+        List<string> orderList = new();
+        try
+        {
+            using (var sr = new StreamReader(file))
+            {
+                string line;
+                int count = 0;
+
+                while ((line = sr.ReadLine()) != null)
+                {
+                    if (count == 0)
+                    {
+                        count++;
+                        continue;
+                    }
+                    var lineContent = line.Split(",");
+                    orderList.Add(lineContent[0]);
+                    //DueDates.Add(lineContent[0], this.SimulationStart.AddSeconds(int.Parse(lineContent[1]))); 
+                }
+            }
+        }
+        catch
+        {
+            throw new FileNotFoundException(file);
+        }
+        return orderList;
+    }
     private Dictionary<(string,string), double> ReadCsvFile(string file)
     {
         Dictionary<(string, string), double> csvData = new Dictionary<(string, string), double>();
@@ -913,6 +1060,8 @@ public class CSharpSimulator : ISimulator
             //var stage = [resource.Name];
             var lastOrder = resource.Operations.Last().Order.Split("_").First();
             order = order.Split("_").First();
+            changeoverTime = ChangeoverTimes[stage][(order, lastOrder)];
+            /*
             switch (stage)
             {
                 case "S1":
@@ -936,6 +1085,7 @@ public class CSharpSimulator : ISimulator
                 default:
                     break;
             }
+            */
         }
         return changeoverTime;
     }
